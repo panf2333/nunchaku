@@ -54,7 +54,14 @@ def init_app_state(app_state, pipeline, args):
 
 def load_pipeline(args) -> FluxPipeline:
     model_name = args.model_name
-    dtype = args.dtype
+    if args.model_name == "dev":
+        model_name = "mit-han-lab/svdq-int4-flux.1-dev"
+        dtype = torch.float16
+    elif args.model_name == "schnell":
+        model_name = "mit-han-lab/svdq-int4-flux.1-schnell"
+        dtype = torch.float16
+    else:
+       raise ValueError("Invalid model name")
     pretrained_model_name_or_path = pretrained_model_dict[model_name]
     transformer = NunchakuFluxTransformer2dModel.from_pretrained(model_name)
     pipeline = FluxPipeline.from_pretrained(
@@ -82,8 +89,6 @@ async def show_version():
 def build_app(args: Namespace) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.include_router(router)
-    app.root_path = args.root_path
-
 
     app.add_middleware(
         CORSMiddleware,
@@ -117,7 +122,7 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     signal.signal(signal.SIGTERM, signal_handler)
     app = build_app(args)
     async with load_pipeline(args) as pipeline:
-        
+
         await init_app_state(app.state, pipeline, args)
         shutdown_task = await serve_http(
             app,
@@ -194,9 +199,9 @@ def _add_shutdown_handlers(app: FastAPI, server: uvicorn.Server) -> None:
 
     @app.exception_handler(RuntimeError)
     async def runtime_error_handler(request: Request, __):
-    
+
         pipeline = request.app.state.pipeline
-        
+
         logger.fatal("RuntimeError, terminating server "
                          "process")
         server.should_exit = True
@@ -223,6 +228,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--model-name", type=str, default="schnell")
     args = parser.parse_args()
 
     uvloop.run(run_server(args))
