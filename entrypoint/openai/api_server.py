@@ -1,4 +1,5 @@
 import asyncio
+from io import BytesIO
 import resource
 import signal
 import sys
@@ -7,6 +8,7 @@ from argparse import ArgumentParser, Namespace
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any, Optional
+import uuid
 
 import psutil
 import uvicorn
@@ -78,8 +80,17 @@ async def health(raw_request: Request) -> Response:
 async def imagesGenerations(req: CreateImageRequest) -> Response:
     """Ping check. Endpoint required for SageMaker"""
     image = req.app.state.pipeline(req.prompt, req.num_inference_steps, req.guidance_scale).images[0]
-    image.save("output.png")
-    return Response(status_code=200)
+    path = f"output-{uuid.uuid4()}.png"
+    logger.info(f"Saving image to {path}")
+    image.save(path)
+
+    # 创建一个 BytesIO 对象
+    buf = BytesIO()
+    image.save(buf, format='JPEG')
+    buf.seek(0)
+
+    return Response(buf.read(), media_type="image/jpeg")
+    # return Response(status_code=200)
 
 @router.get("/version")
 async def show_version():
