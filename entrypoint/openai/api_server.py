@@ -54,7 +54,7 @@ def init_app_state(app_state, pipeline, args):
     app_state.dtype = args.dtype
     app_state.pipeline = pipeline
 
-def load_pipeline(args) -> FluxPipeline:
+async def load_pipeline(args) -> FluxPipeline:
     model_name = args.model_name
     if args.model_name == "dev":
         model_name = "mit-han-lab/svdq-int4-flux.1-dev"
@@ -76,7 +76,7 @@ async def health(raw_request: Request) -> Response:
     return Response(status_code=200)
 
 
-@router.api_route("/v1/images/generations ", methods=["GET", "POST"])
+@router.api_route("/v1/images/generations", methods=["GET", "POST"])
 async def imagesGenerations(req: CreateImageRequest) -> Response:
     """Ping check. Endpoint required for SageMaker"""
     image = req.app.state.pipeline(req.prompt, req.num_inference_steps, req.guidance_scale).images[0]
@@ -134,7 +134,7 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     app = build_app(args)
     async with load_pipeline(args) as pipeline:
 
-        await init_app_state(app.state, pipeline, args)
+        init_app_state(app.state, pipeline, args)
         shutdown_task = await serve_http(
             app,
             host=args.host,
@@ -235,11 +235,19 @@ def set_ulimit(target_soft_limit=65535):
                 "`OSError: [Errno 24] Too many open files`. Consider "
                 "increasing with ulimit -n", current_soft, e)
 
+def mark_args(parser: ArgumentParser) -> None:
+    parser.add_argument("--dtype", type=str, default="bf16")
+    parser.add_argument("--allowed-origins", type=list, default=["*"])
+    parser.add_argument("--allow-credentials", type=bool, default=True)
+    parser.add_argument("--allowed-methods", type=list, default=["*"])
+    parser.add_argument("--allowed-headers", type=list, default=["*"])
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--model-name", type=str, default="schnell")
+    mark_args(parser)
     args = parser.parse_args()
 
     uvloop.run(run_server(args))
