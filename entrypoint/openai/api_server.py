@@ -87,7 +87,11 @@ async def health(raw_request: Request) -> Response:
 @router.api_route("/v1/images/generations", methods=["GET", "POST"])
 async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Response:
     """Ping check. Endpoint required for SageMaker"""
-    image = raw_req.app.state.pipeline(req.prompt, num_inference_steps=req.num_inference_steps, guidance_scale=req.guidance_scale).images[0]
+    try:
+        image = raw_req.app.state.pipeline(req.prompt, num_inference_steps=req.num_inference_steps, guidance_scale=req.guidance_scale).images[0]
+    except Exception as e:
+        logger.error(e)
+        return Response(status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
     path = f"output-{uuid.uuid4()}.png"
     logger.info(f"Saving image to {path}")
     image.save(path)
