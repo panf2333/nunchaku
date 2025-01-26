@@ -63,7 +63,7 @@ def init_app_state(app_state, pipeline, args):
     app_state.dtype = args.dtype
     app_state.pipeline = pipeline
 
-async def load_pipeline(args) -> FluxPipeline:
+def load_pipeline(args) -> FluxPipeline:
     model_name = args.model_name
     if args.model_name == "dev":
         model_name = "mit-han-lab/svdq-int4-flux.1-dev"
@@ -142,7 +142,7 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     signal.signal(signal.SIGTERM, signal_handler)
     app = build_app(args)
     pipeline = load_pipeline(args)
-
+    logger.info("Loaded pipeline")
     init_app_state(app.state, pipeline, args)
     shutdown_task = await serve_http(
         app,
