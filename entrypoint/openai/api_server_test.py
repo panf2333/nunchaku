@@ -1,5 +1,7 @@
 import asyncio
 from io import BytesIO
+
+import logging
 import resource
 import signal
 import sys
@@ -19,11 +21,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from logging import Logger
-
 import torch
 from diffusers import FluxPipeline
 
-from createImageRequest import CreateImageRequest
+from create_image_request import CreateImageRequest
+from base_response import BaseResponse
+
 # from nunchaku.models.transformer_flux import NunchakuFluxTransformer2dModel
 
 VERSION = "1.0.0"
@@ -32,7 +35,14 @@ TIMEOUT_KEEP_ALIVE = 180  # seconds
 prometheus_multiproc_dir: tempfile.TemporaryDirectory
 
 # Cannot use __name__ (https://github.com/vllm-project/vllm/pull/4765)
-logger = Logger('entrypoints.openai.api_server')
+logger = logging.getLogger('entrypoints.openai.api_server')
+logger.setLevel(logging.INFO)
+
+FORMAT = '%(asctime)s %(levelname)s %(message)s'
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(FORMAT))
+logger.addHandler(console_handler)
 
 pretrained_model_dict = {"mit-han-lab/svdq-int4-flux.1-dev":"black-forest-labs/FLUX.1-dev", "mit-han-lab/svdq-int4-flux.1-schnell":"black-forest-labs/FLUX.1-schnell"}
 @asynccontextmanager
@@ -87,20 +97,22 @@ async def health(raw_request: Request) -> Response:
 @router.api_route("/v1/images/generations", methods=["GET", "POST"])
 async def imagesGenerations(req: CreateImageRequest) -> Response:
     """Ping check. Endpoint required for SageMaker"""
-    image = PIL.Image.open("input_image.jpg")
-    # image = req.app.state.pipeline(req.prompt, req.num_inference_steps, req.guidance_scale).images[0]
-    path = f"output-{uuid.uuid4()}.png"
-    logger.info(f"Saving image to {path}")
-    print(f"Saving image to {path}")
-    image.save(path)
+    # image = PIL.Image.open("input_image.jpg")
+    # # image = req.app.state.pipeline(req.prompt, req.num_inference_steps, req.guidance_scale).images[0]
+    # path = f"output-{uuid.uuid4()}.png"
+    # logger.info(f"Saving image to {path}")
+    # print(f"Saving image to {path}")
+    # image.save(path)
 
-    # 创建一个 BytesIO 对象
-    buf = BytesIO()
-    image.save(buf, format='JPEG')
-    buf.seek(0)
+    # # 创建一个 BytesIO 对象
+    # buf = BytesIO()
+    # image.save(buf, format='JPEG')
+    # buf.seek(0)
 
-    return Response(buf.read(), media_type="image/jpeg")
+    # return Response(buf.read(), media_type="image/jpeg")
     # return Response(status_code=200)
+    result = BaseResponse(code=10000, message="success", data=[{"url": "https://www.baidu.com"}])
+    return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
 @router.get("/version")
 async def show_version():

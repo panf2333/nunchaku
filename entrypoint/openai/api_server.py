@@ -1,5 +1,6 @@
 import asyncio
 from io import BytesIO
+import logging
 import resource
 import signal
 import sys
@@ -22,7 +23,7 @@ from logging import Logger
 import torch
 from diffusers import FluxPipeline
 
-from createImageRequest import CreateImageRequest
+from entrypoint.openai.create_image_request import CreateImageRequest
 from nunchaku.models.transformer_flux import NunchakuFluxTransformer2dModel
 
 VERSION = "1.0.0"
@@ -32,6 +33,14 @@ prometheus_multiproc_dir: tempfile.TemporaryDirectory
 
 # Cannot use __name__ (https://github.com/vllm-project/vllm/pull/4765)
 logger = Logger('entrypoints.openai.api_server')
+logger.setLevel(logging.INFO)
+
+FORMAT = '%(asctime)s %(levelname)s %(message)s'
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(FORMAT))
+logger.addHandler(console_handler)
+
 
 pretrained_model_dict = {"mit-han-lab/svdq-int4-flux.1-dev":"black-forest-labs/FLUX.1-dev", "mit-han-lab/svdq-int4-flux.1-schnell":"black-forest-labs/FLUX.1-schnell"}
 @asynccontextmanager
