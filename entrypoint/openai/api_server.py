@@ -67,10 +67,10 @@ def load_pipeline(args) -> FluxPipeline:
     model_name = args.model_name
     if args.model_name == "dev":
         model_name = "mit-han-lab/svdq-int4-flux.1-dev"
-        dtype = torch.float16
+        dtype = torch.bfloat16
     elif args.model_name == "schnell":
         model_name = "mit-han-lab/svdq-int4-flux.1-schnell"
-        dtype = torch.float16
+        dtype = torch.bfloat16
     else:
        raise ValueError("Invalid model name")
     pretrained_model_name_or_path = pretrained_model_dict[model_name]
