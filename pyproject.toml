@@ -19,4 +19,5 @@ dependencies = [
     "protobuf",
     "huggingface_hub",
     "fastapi",
+    "uvloop",
 ]

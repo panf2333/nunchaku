@@ -141,16 +141,16 @@ async def run_server(args, **uvicorn_kwargs) -> None:
 
     signal.signal(signal.SIGTERM, signal_handler)
     app = build_app(args)
-    async with load_pipeline(args) as pipeline:
+    pipeline = load_pipeline(args)
 
-        init_app_state(app.state, pipeline, args)
-        shutdown_task = await serve_http(
-            app,
-            host=args.host,
-            port=args.port,
-            timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
-            **uvicorn_kwargs,
-        )
+    init_app_state(app.state, pipeline, args)
+    shutdown_task = await serve_http(
+        app,
+        host=args.host,
+        port=args.port,
+        timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
+        **uvicorn_kwargs,
+    )
     # NB: Await server shutdown only after the backend context is exited
     await shutdown_task
 
