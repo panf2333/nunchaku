@@ -86,7 +86,12 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
     bucket = state.s3_bucket
     object_name = state.s3_prefix_path + f"{state.model}-{state.precision}-{uuid.uuid4()}.png"
     s3_client = state.s3_client
-    url = s3_util.upload_file_and_get_presigned_url(s3_client, bucket, object_name, image)
+    
+    image_bytes = BytesIO()
+    image.save(image_bytes, format="PNG")
+    image_bytes.seek(0)
+
+    url = s3_util.upload_file_and_get_presigned_url(s3_client, bucket, object_name, image_bytes)
     if url is not None:
         image_response = ImageResponse(url=url, latency=latency)
         result = BaseResponse(code=10000, message="success", data=[image_response])
