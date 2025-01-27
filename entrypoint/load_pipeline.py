@@ -2,8 +2,11 @@ from diffusers import FluxPipeline
 import torch
 from peft.tuners import lora
 
+from entrypoint.openai.log import setup_logging
 from entrypoint.vars import LORA_PATHS, SVDQ_LORA_PATHS
 from nunchaku.models.transformer_flux import NunchakuFluxTransformer2dModel
+
+logger = setup_logging()
 
 def get_pipeline(
     model_name: str,
@@ -14,6 +17,7 @@ def get_pipeline(
     device: str | torch.device = "cuda",
     pipeline_init_kwargs: dict = {},
 ) -> FluxPipeline:
+    logger.info(f"Loading model {model_name} with precision {precision}, use_qencoder={use_qencoder}, lora_name={lora_name}, lora_weight={lora_weight}, device={device}")
     if model_name == "schnell":
         if precision == "int4":
             assert torch.device(device).type == "cuda", "int4 only supported on CUDA devices"
