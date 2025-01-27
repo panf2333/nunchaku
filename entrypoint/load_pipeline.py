@@ -4,6 +4,7 @@ from peft.tuners import lora
 
 from entrypoint.vars import LORA_PATHS, SVDQ_LORA_PATHS
 from nunchaku.models.transformer_flux import NunchakuFluxTransformer2dModel
+
 def get_pipeline(
     model_name: str,
     precision: str,

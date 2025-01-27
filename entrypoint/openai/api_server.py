@@ -124,7 +124,7 @@ async def run_server(args, **uvicorn_kwargs) -> None:
 
     signal.signal(signal.SIGTERM, signal_handler)
     app = build_app(args)
-    pipeline = load_pipeline(args.model, args.precision, args.use_qencoder, args.lora_name, args.lora_weight)
+    pipeline = load_pipeline.get_pipeline(args.model, args.precision, args.use_qencoder, args.lora_name, args.lora_weight)
     logger.info("Loaded pipeline")
     init_app_state(app.state, pipeline, args)
     shutdown_task = await serve_http(
