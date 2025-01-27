@@ -242,8 +242,9 @@ def init_app_state(app_state, pipeline, args):
     app_state.precision = args.precision
     app_state.pipeline = pipeline
     app_state.lora_name = args.lora_name
-    
+    logger.info("read config.json")
     config = read_config_json('config.json')
+    logger.info("get config done")
     app_state.s3_config = config["s3"]
     app_state.s3_client = s3_util.get_s3_client(app_state.s3_config)
     app_state.s3_bucket = app_state.s3_config['bucket']
