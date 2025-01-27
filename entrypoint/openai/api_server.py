@@ -1,5 +1,6 @@
 import asyncio
 from io import BytesIO
+import json
 import logging
 import resource
 import signal
@@ -8,6 +9,7 @@ import tempfile
 from argparse import ArgumentParser, Namespace
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+import time
 from typing import Any, Optional
 import uuid
 
@@ -18,13 +20,14 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from logging import Logger
-
 import torch
-from diffusers import FluxPipeline
-
-from entrypoint.openai.create_image_request import CreateImageRequest
-from nunchaku.models.transformer_flux import NunchakuFluxTransformer2dModel
+from create_image_request import CreateImageRequest
+from base_response import BaseResponse, ImageResponse
+from entrypoint import load_pipeline
+from entrypoint.openai.log import setup_logging
+from nunchaku.models.safety_checker import SafetyChecker
+import s3_util  
+from vars import PROMPT_TEMPLATES
 
 VERSION = "1.0.0"
 TIMEOUT_KEEP_ALIVE = 180  # seconds
@@ -32,17 +35,10 @@ TIMEOUT_KEEP_ALIVE = 180  # seconds
 prometheus_multiproc_dir: tempfile.TemporaryDirectory
 
 # Cannot use __name__ (https://github.com/vllm-project/vllm/pull/4765)
-logger = Logger('entrypoints.openai.api_server')
-logger.setLevel(logging.INFO)
+logger = setup_logging()
 
-FORMAT = '%(asctime)s %(levelname)s %(message)s'
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter(FORMAT))
-logger.addHandler(console_handler)
+router = APIRouter()
 
-
-pretrained_model_dict = {"mit-han-lab/svdq-int4-flux.1-dev":"black-forest-labs/FLUX.1-dev", "mit-han-lab/svdq-int4-flux.1-schnell":"black-forest-labs/FLUX.1-schnell"}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -55,59 +51,45 @@ async def lifespan(app: FastAPI):
         logger.info("stop server empty cuda")
         del app.state
 
-
-router = APIRouter()
-
-def init_app_state(app_state, pipeline, args):
-    app_state.model_name = args.model_name
-    app_state.dtype = args.dtype
-    app_state.pipeline = pipeline
-
-def load_pipeline(args) -> FluxPipeline:
-    model_name = args.model_name
-    if args.model_name == "dev":
-        model_name = "mit-han-lab/svdq-int4-flux.1-dev"
-        dtype = torch.bfloat16
-    elif args.model_name == "schnell":
-        model_name = "mit-han-lab/svdq-int4-flux.1-schnell"
-        dtype = torch.bfloat16
-    else:
-       raise ValueError("Invalid model name")
-    pretrained_model_name_or_path = pretrained_model_dict[model_name]
-    transformer = NunchakuFluxTransformer2dModel.from_pretrained(model_name)
-    pipeline = FluxPipeline.from_pretrained(
-    pretrained_model_name_or_path, transformer=transformer, torch_dtype=dtype).to("cuda")
-    return pipeline
-
 @router.get("/health")
 async def health(raw_request: Request) -> Response:
     """Health check."""
     return Response(status_code=200)
 
-@router.api_route("/v1/images/generations", methods=["GET", "POST"])
-async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Response:
-    """Ping check. Endpoint required for SageMaker"""
-    try:
-        image = raw_req.app.state.pipeline(req.prompt, num_inference_steps=req.num_inference_steps, guidance_scale=req.guidance_scale).images[0]
-    except Exception as e:
-        logger.exception("imagesGenerations failed")
-        return Response(status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
-    path = f"output-{uuid.uuid4()}.png"
-    logger.info(f"Saving image to {path}")
-    image.save(path)
-
-    # 创建一个 BytesIO 对象
-    buf = BytesIO()
-    image.save(buf, format='JPEG')
-    buf.seek(0)
-
-    return Response(buf.read(), media_type="image/jpeg")
-    # return Response(status_code=200)
-
 @router.get("/version")
 async def show_version():
     version = {"version": VERSION}
     return JSONResponse(content=version)
+
+@router.api_route("/v1/images/generations", methods=["GET", "POST"])
+async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Response:
+    """Ping check. Endpoint required for SageMaker"""
+    state = raw_req.app.state
+    try:
+        lora_name = state.lora_name
+        if not state.safety_checker(prompt):
+            prompt = "A peaceful world."
+            logger.info("Unsafe prompt detected")
+        prompt = PROMPT_TEMPLATES[lora_name].format(prompt=prompt)
+        start_time = time.time()
+        image = raw_req.app.state.pipeline(req.prompt, num_inference_steps=req.num_inference_steps, guidance_scale=req.guidance_scale).images[0]
+        end_time = time.time()
+        latency = end_time - start_time
+        logger.info(f"start_time: {start_time}, end_time: {end_time}, latency: {latency}")
+    except Exception as e:
+        logger.exception("imagesGenerations failed")
+        return Response(status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
+    
+    bucket = state.s3_bucket
+    object_name = state.s3_prefix_path + f"{state.model_name}-{state.dtype}-{uuid.uuid4()}.png"
+    s3_client = state.s3_client
+    url = s3_util.upload_file_and_get_presigned_url(s3_client, bucket, object_name, image)
+    if url is not None:
+        image_response = ImageResponse(url=url, latency=latency)
+        result = BaseResponse(code=10000, message="success", data=[image_response])
+    else:
+        result = BaseResponse(code=10001, message="failed to upload file", data=[])    
+    return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
 def build_app(args: Namespace) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
@@ -128,11 +110,9 @@ def build_app(args: Namespace) -> FastAPI:
 
     return app
 
-
 async def run_server(args, **uvicorn_kwargs) -> None:
     logger.info("nunchaku API server version %s", VERSION)
     logger.info("args: %s", args)
-
 
     # workaround to avoid footguns where uvicorn drops requests with too
     # many concurrent requests active
@@ -144,7 +124,7 @@ async def run_server(args, **uvicorn_kwargs) -> None:
 
     signal.signal(signal.SIGTERM, signal_handler)
     app = build_app(args)
-    pipeline = load_pipeline(args)
+    pipeline = load_pipeline(args.model, args.precision, args.use_qencoder, args.lora_name, args.lora_weight)
     logger.info("Loaded pipeline")
     init_app_state(app.state, pipeline, args)
     shutdown_task = await serve_http(
@@ -156,7 +136,6 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     )
     # NB: Await server shutdown only after the backend context is exited
     await shutdown_task
-
 
 async def serve_http(app: FastAPI, **uvicorn_kwargs: Any):
     logger.info("Available routes are:")
@@ -222,9 +201,6 @@ def _add_shutdown_handlers(app: FastAPI, server: uvicorn.Server) -> None:
 
     @app.exception_handler(RuntimeError)
     async def runtime_error_handler(request: Request, __):
-
-        pipeline = request.app.state.pipeline
-
         logger.fatal("RuntimeError, terminating server "
                          "process")
         server.should_exit = True
@@ -247,8 +223,40 @@ def set_ulimit(target_soft_limit=65535):
                 "`OSError: [Errno 24] Too many open files`. Consider "
                 "increasing with ulimit -n", current_soft, e)
 
+def read_config_json(file_path):
+    with open(file_path, 'r') as file:
+        config = json.load(file)
+    return config
+
+def init_app_state(app_state, pipeline, args):
+    app_state.model = args.model
+    app_state.precision = args.precision
+    app_state.pipeline = pipeline
+    app_state.lora_name = args.lora_name
+    
+    config = read_config_json('config.json')
+    app_state.s3_config = config["s3"]
+    app_state.s3_client = s3_util.get_s3_client(app_state.s3_config)
+    app_state.s3_bucket = app_state.s3_config['bucket']
+    app_state.s3_prefix_path = app_state.s3_config["prefix_path"] + "/"
+    
+    app_state.safety_checker = SafetyChecker("cuda", disabled=args.no_safety_checker)
+
 def mark_args(parser: ArgumentParser) -> None:
-    parser.add_argument("--dtype", type=str, default="bf16")
+    parser.add_argument(
+        "-m", "--model", type=str, default="schnell", choices=["schnell", "dev"], help="Which FLUX.1 model to use"
+    )
+    parser.add_argument(
+        "-p",
+        "--precisions",
+        type=str,
+        default=["int4"],
+        nargs="*",
+        choices=["int4", "bf16"],
+        help="Which precisions to use",
+    )
+    parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder", default=False)
+    parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker", default=True)
     parser.add_argument("--allowed-origins", type=list, default=["*"])
     parser.add_argument("--allow-credentials", type=bool, default=True)
     parser.add_argument("--allowed-methods", type=list, default=["*"])
@@ -258,7 +266,6 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--model-name", type=str, default="schnell")
     mark_args(parser)
     args = parser.parse_args()
 

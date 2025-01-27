@@ -20,4 +20,5 @@ dependencies = [
     "huggingface_hub",
     "fastapi",
     "uvloop",
+    "boto3",
 ]

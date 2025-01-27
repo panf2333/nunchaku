@@ -1,7 +1,8 @@
 import asyncio
 from io import BytesIO
-
+import json
 import logging
+import os
 import resource
 import signal
 import sys
@@ -26,7 +27,7 @@ from diffusers import FluxPipeline
 
 from create_image_request import CreateImageRequest
 from base_response import BaseResponse
-
+import s3_util  
 # from nunchaku.models.transformer_flux import NunchakuFluxTransformer2dModel
 
 VERSION = "1.0.0"
@@ -60,10 +61,16 @@ async def lifespan(app: FastAPI):
 
 router = APIRouter()
 
+
+
 def init_app_state(app_state, args):
     app_state.model_name = args.model_name
     app_state.dtype = args.dtype
-
+    config = read_config_json('config.json')
+    app_state.s3_config = config["s3"]
+    app_state.s3_client = s3_util.get_s3_client(app_state.s3_config)
+    app_state.s3_bucket = app_state.s3_config['bucket']
+    app_state.s3_prefix_path = app_state.s3_config["prefix_path"] + "/"
 
 # def init_app_state(app_state, pipeline, args):
 #     app_state.model_name = args.model_name
@@ -95,7 +102,7 @@ async def health(raw_request: Request) -> Response:
 
 
 @router.api_route("/v1/images/generations", methods=["GET", "POST"])
-async def imagesGenerations(req: CreateImageRequest) -> Response:
+async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Response:
     """Ping check. Endpoint required for SageMaker"""
     # image = PIL.Image.open("input_image.jpg")
     # # image = req.app.state.pipeline(req.prompt, req.num_inference_steps, req.guidance_scale).images[0]
@@ -111,7 +118,26 @@ async def imagesGenerations(req: CreateImageRequest) -> Response:
 
     # return Response(buf.read(), media_type="image/jpeg")
     # return Response(status_code=200)
-    result = BaseResponse(code=10000, message="success", data=[{"url": "https://www.baidu.com"}])
+    bucket = raw_req.app.state.s3_bucket
+    object_name = raw_req.app.state.s3_prefix_path + f"output-{uuid.uuid4()}.png"
+    file_name = "input_image.jpg"
+    # Open the file in binary mode
+    # Get s3_client from app state
+    s3_client = raw_req.app.state.s3_client  
+    try:
+        with open(file_name, 'rb') as file:
+            # Upload the file
+            s3_util.upload_fileobj(s3_client, file, bucket, object_name)
+            logger.info(f"File {file_name} uploaded to {bucket}/{object_name}")
+            response_url = s3_util.create_presigned_url(s3_client, bucket, object_name)
+            if response_url is not None:
+                logger.info(f"Presigned URL: {response_url}")
+                result = BaseResponse(code=10000, message="success", data=[{"url": response_url}])
+            else:
+                result = BaseResponse(code=10001, message="failed to generate presigned URL", data=[])
+    except Exception as e:
+        logger.error(f"Error uploading file {file_name}: {e}")
+        result = BaseResponse(code=10001, message="failed to upload file", data=[])     
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
 @router.get("/version")
@@ -263,14 +289,21 @@ def set_ulimit(target_soft_limit=65535):
             logger.warning(
                 "Found ulimit of %s and failed to automatically increase"
                 "with error %s. This can cause fd limit errors like"
-                 "`OSError: [Errno 24] Too many open files`. Consider "
+                "`OSError: [Errno 24] Too many open files`. Consider "
                 "increasing with ulimit -n", current_soft, e)
+
+def read_config_json(file_path):
+    with open(file_path, 'r') as file:
+        config = json.load(file)
+    return config
+
 def mark_args(parser: ArgumentParser) -> None:
     parser.add_argument("--dtype", type=str, default="bf16")
     parser.add_argument("--allowed-origins", type=list, default=["*"])
     parser.add_argument("--allow-credentials", type=bool, default=True)
     parser.add_argument("--allowed-methods", type=list, default=["*"])
     parser.add_argument("--allowed-headers", type=list, default=["*"])
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()
