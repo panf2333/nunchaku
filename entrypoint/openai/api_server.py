@@ -248,7 +248,7 @@ def mark_args(parser: ArgumentParser) -> None:
     )
     parser.add_argument(
         "-p",
-        "--precisions",
+        "--precision",
         type=str,
         default=["int4"],
         nargs="*",
