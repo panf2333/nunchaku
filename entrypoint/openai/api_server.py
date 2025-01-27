@@ -79,7 +79,9 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
         logger.info(f"start_time: {start_time}, end_time: {end_time}, latency: {latency}")
     except Exception as e:
         logger.exception("imagesGenerations failed")
-        return Response(status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
+        result = BaseResponse(code=10001, message="failed to generation image", data=[])    
+        return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
+
     
     bucket = state.s3_bucket
     object_name = state.s3_prefix_path + f"{state.model_name}-{state.dtype}-{uuid.uuid4()}.png"
@@ -89,7 +91,7 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
         image_response = ImageResponse(url=url, latency=latency)
         result = BaseResponse(code=10000, message="success", data=[image_response])
     else:
-        result = BaseResponse(code=10001, message="failed to upload file", data=[])    
+        result = BaseResponse(code=10001, message="failed to generation image", data=[])    
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
 def build_app(args: Namespace) -> FastAPI:
