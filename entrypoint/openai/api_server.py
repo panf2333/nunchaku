@@ -65,6 +65,7 @@ async def show_version():
 async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Response:
     """Ping check. Endpoint required for SageMaker"""
     state = raw_req.app.state
+    prompt = req.prompt
     try:
         lora_name = state.lora_name
         if not state.safety_checker(prompt):
@@ -72,7 +73,7 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
             logger.info("Unsafe prompt detected")
         prompt = PROMPT_TEMPLATES[lora_name].format(prompt=prompt)
         start_time = time.time()
-        image = raw_req.app.state.pipeline(req.prompt, num_inference_steps=req.num_inference_steps, guidance_scale=req.guidance_scale).images[0]
+        image = raw_req.app.state.pipeline(prompt, num_inference_steps=req.num_inference_steps, guidance_scale=req.guidance_scale).images[0]
         end_time = time.time()
         latency = end_time - start_time
         logger.info(f"start_time: {start_time}, end_time: {end_time}, latency: {latency}")
