@@ -127,6 +127,7 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     pipeline = load_pipeline.get_pipeline(args.model, args.precision, args.use_qencoder, args.lora_name, args.lora_weight)
     logger.info("Loaded pipeline")
     init_app_state(app.state, pipeline, args)
+    logger.info("Initialized app state")
     shutdown_task = await serve_http(
         app,
         host=args.host,
@@ -235,12 +236,14 @@ def init_app_state(app_state, pipeline, args):
     app_state.lora_name = args.lora_name
     
     config = read_config_json('config.json')
+    logger.info("S3 config: %s", config)
     app_state.s3_config = config["s3"]
     app_state.s3_client = s3_util.get_s3_client(app_state.s3_config)
     app_state.s3_bucket = app_state.s3_config['bucket']
     app_state.s3_prefix_path = app_state.s3_config["prefix_path"] + "/"
-    
+    logger.info("start init safety checker")
     app_state.safety_checker = SafetyChecker("cuda", disabled=args.no_safety_checker)
+    logger.info("end init safety checker")
 
 def mark_args(parser: ArgumentParser) -> None:
     parser.add_argument(
