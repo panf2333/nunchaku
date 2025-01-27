@@ -25,9 +25,9 @@ from create_image_request import CreateImageRequest
 from base_response import BaseResponse, ImageResponse
 from entrypoint import load_pipeline
 from entrypoint.openai.log import setup_logging
+from entrypoint.vars import PROMPT_TEMPLATES
 from nunchaku.models.safety_checker import SafetyChecker
 import s3_util  
-from vars import PROMPT_TEMPLATES
 
 VERSION = "1.0.0"
 TIMEOUT_KEEP_ALIVE = 180  # seconds

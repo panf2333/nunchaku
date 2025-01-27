@@ -2,8 +2,8 @@ from diffusers import FluxPipeline
 import torch
 from peft.tuners import lora
 
+from entrypoint.vars import LORA_PATHS, SVDQ_LORA_PATHS
 from nunchaku.models.transformer_flux import NunchakuFluxTransformer2dModel
-from vars import LORA_PATHS, SVDQ_LORA_PATHS
 def get_pipeline(
     model_name: str,
     precision: str,
