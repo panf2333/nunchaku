@@ -250,8 +250,8 @@ def mark_args(parser: ArgumentParser) -> None:
         "-p",
         "--precision",
         type=str,
-        default=["int4"],
-        nargs="*",
+        default="int4",
+        nargs=1,
         choices=["int4", "bf16"],
         help="Which precisions to use",
     )
