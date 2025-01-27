@@ -84,7 +84,7 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
 
     
     bucket = state.s3_bucket
-    object_name = state.s3_prefix_path + f"{state.model_name}-{state.dtype}-{uuid.uuid4()}.png"
+    object_name = state.s3_prefix_path + f"{state.model}-{state.precision}-{uuid.uuid4()}.png"
     s3_client = state.s3_client
     url = s3_util.upload_file_and_get_presigned_url(s3_client, bucket, object_name, image)
     if url is not None:
@@ -244,7 +244,7 @@ def init_app_state(app_state, pipeline, args):
     app_state.s3_client = s3_util.get_s3_client(app_state.s3_config)
     app_state.s3_bucket = app_state.s3_config['bucket']
     app_state.s3_prefix_path = app_state.s3_config["prefix_path"] + "/"
-    logger.info("start init safety checker")
+    logger.info(f"start init safety checker {args.no_safety_checker}")
     app_state.safety_checker = SafetyChecker("cuda", disabled=args.no_safety_checker)
     logger.info("end init safety checker")
 
@@ -264,7 +264,7 @@ def mark_args(parser: ArgumentParser) -> None:
     parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder", default=False)
     parser.add_argument("--lora-name", default="None", choices=["None", "All", "Anime", "GHIBSKY Illustration", "Realism", "Yarn Art", "Children Sketch"])
     parser.add_argument("--lora-weight", type=float, default=1.0)
-    parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker", default=True)
+    parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker", default=False)
 
     parser.add_argument("--allowed-origins", type=list, default=["*"])
     parser.add_argument("--allow-credentials", type=bool, default=True)
