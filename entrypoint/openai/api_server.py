@@ -256,7 +256,6 @@ def mark_args(parser: ArgumentParser) -> None:
         help="Which precisions to use",
     )
     parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder", default=False)
-    parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder", default=False)
     parser.add_argument("--lora-namer", default="None", choices=["None", "All", "Anime", "GHIBSKY Illustration", "Realism", "Yarn Art", "Children Sketch"])
     parser.add_argument("--lora-weight", type=float, default=1.0)
     parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker", default=True)
