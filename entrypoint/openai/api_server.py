@@ -66,6 +66,7 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
     """Ping check. Endpoint required for SageMaker"""
     state = raw_req.app.state
     prompt = req.prompt
+    logger.info(f"req: {req}")
     try:
         lora_name = state.lora_name
         if not state.safety_checker(prompt):
