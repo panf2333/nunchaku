@@ -36,6 +36,14 @@ LORA_PATHS = {
     },
 }
 
+curl -X POST http://ec2-54-184-128-101.us-west-2.compute.amazonaws.com:8000/v1/images/generations \
+        -H "Content-Type: application/json" \
+        -d '{"prompt": "your prompt text here", "num_inference_steps": 50, "guidance_scale": 3.5, "lora_weight": 0.8, "seed": 0}'
+
+curl -X POST http://127.0.0.1:8000/v1/images/generations \
+        -H "Content-Type: application/json" \
+        -d '{"prompt": "your prompt text here", "num_inference_steps": 50, "guidance_scale": 3.5, "lora_weight": 0.8, "seed": 0}'
+
 SVDQ_LORA_PATH_FORMAT = "mit-han-lab/svdquant-models/svdq-flux.1-dev-lora-{name}.safetensors"
 SVDQ_LORA_PATHS = {
     "Anime": SVDQ_LORA_PATH_FORMAT.format(name="anime"),

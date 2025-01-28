@@ -26,8 +26,8 @@ import torch
 from diffusers import FluxPipeline
 
 from create_image_request import CreateImageRequest
-from base_response import BaseResponse
-import s3_util  
+from base_response import BaseResponse, ImageResponse
+# import s3_util
 # from nunchaku.models.transformer_flux import NunchakuFluxTransformer2dModel
 
 VERSION = "1.0.0"
@@ -68,7 +68,7 @@ def init_app_state(app_state, args):
     app_state.dtype = args.dtype
     config = read_config_json('config.json')
     app_state.s3_config = config["s3"]
-    app_state.s3_client = s3_util.get_s3_client(app_state.s3_config)
+    # app_state.s3_client = s3_util.get_s3_client(app_state.s3_config)
     app_state.s3_bucket = app_state.s3_config['bucket']
     app_state.s3_prefix_path = app_state.s3_config["prefix_path"] + "/"
 
@@ -118,27 +118,37 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
 
     # return Response(buf.read(), media_type="image/jpeg")
     # return Response(status_code=200)
-    bucket = raw_req.app.state.s3_bucket
-    object_name = raw_req.app.state.s3_prefix_path + f"output-{uuid.uuid4()}.png"
-    file_name = "input_image.jpg"
-    # Open the file in binary mode
-    # Get s3_client from app state
-    s3_client = raw_req.app.state.s3_client  
-    try:
-        with open(file_name, 'rb') as file:
-            # Upload the file
-            s3_util.upload_fileobj(s3_client, file, bucket, object_name)
-            logger.info(f"File {file_name} uploaded to {bucket}/{object_name}")
-            response_url = s3_util.create_presigned_url(s3_client, bucket, object_name)
-            if response_url is not None:
-                logger.info(f"Presigned URL: {response_url}")
-                result = BaseResponse(code=10000, message="success", data=[{"url": response_url}])
-            else:
-                result = BaseResponse(code=10001, message="failed to generate presigned URL", data=[])
-    except Exception as e:
-        logger.error(f"Error uploading file {file_name}: {e}")
-        result = BaseResponse(code=10001, message="failed to upload file", data=[])     
+    # logger.info(f"req: {req}")
+    # bucket = raw_req.app.state.s3_bucket
+    # object_name = raw_req.app.state.s3_prefix_path + f"output-{uuid.uuid4()}.png"
+    # file_name = "input_image.jpg"
+    # # Open the file in binary mode
+    # # Get s3_client from app state
+    # start_time = time.time()
+    # s3_client = raw_req.app.state.s3_client  
+    # try:
+    #     with open(file_name, 'rb') as file:
+    #         # Upload the file
+    #         s3_util.upload_fileobj(s3_client, file, bucket, object_name)
+    #         logger.info(f"File {file_name} uploaded to {bucket}/{object_name}")
+    #         response_url = s3_util.create_presigned_url(s3_client, bucket, object_name)
+    #         if response_url is not None:
+    #             logger.info(f"Presigned URL: {response_url}")
+    #             end_time = time.time()
+    #             latency = end_time - start_time
+    #             logger.info(f"start_time: {start_time}, end_time: {end_time}, latency: {latency}")
+    #             image_response = ImageResponse(url=response_url, latency=latency)
+    #             result = BaseResponse(code=10000, message="success", data=[image_response])
+    #         else:
+    #             result = BaseResponse(code=10001, message="failed to generate presigned URL", data=[])
+    # except Exception as e:
+    #     logger.error(f"Error uploading file {file_name}: {e}")
+    #     result = BaseResponse(code=10001, message="failed to upload file", data=[])     
+    # return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
+    image = ImageResponse(url="https://www.baidu.com", latency=12.569616556167603)
+    result = BaseResponse(code=10000, message="success", data=[image])
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
+
 
 @router.get("/version")
 async def show_version():
