@@ -5,6 +5,8 @@ defined safety policies using a large language model. Only used deploying online
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import requests
+from entrypoint.openai.protocol import SafeCheckPromptRequest, SafetyCheckResponse
 
 #: Template for the safety check prompt.
 safety_check_template = """You are a policy expert trying to help determine whether a user
@@ -47,8 +49,7 @@ class SafetyChecker:
     >>> checker("Any prompt")
     True
     """
-
-    def __init__(self, device: str | torch.device, disabled: bool = False):
+    def __init__(self, device: str | torch.device = "cuda", url: str = None, disabled: bool = False):
         """
         Initialize the SafetyChecker.
 
@@ -56,16 +57,19 @@ class SafetyChecker:
         ----------
         device : str or torch.device
             The device to run the model on.
+        url: str, optional
+            The URL of the safety checker service.
         disabled : bool, optional
             If True, disables the safety check (default: False).
         """
-        if not disabled:
-            self.device = device
+        self.device = device
+        self.url = url
+        self.disabled = disabled
+        if not disabled and not url:
             self.tokenizer = AutoTokenizer.from_pretrained("google/shieldgemma-2b")
             self.llm = AutoModelForCausalLM.from_pretrained("google/shieldgemma-2b", torch_dtype=torch.bfloat16).to(
                 device
             )
-        self.disabled = disabled
 
     def __call__(self, user_prompt: str, threshold: float = 0.2) -> bool:
         """
@@ -85,6 +89,18 @@ class SafetyChecker:
         """
         if self.disabled:
             return True
+
+        if self.url:
+            try:
+                request_data = SafeCheckPromptRequest(prompt=user_prompt)
+                response = requests.post(self.url, json=request_data.model_dump())
+                response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+                safety_response = SafetyCheckResponse(**response.json())
+                return safety_response.is_safe
+            except requests.exceptions.RequestException as e:
+                print(f"Error during request: {e}")
+                return False  # Return False in case of an error
+
         device = self.device
 
         inputs = self.tokenizer(safety_check_template.format(user_prompt=user_prompt), return_tensors="pt").to(device)
