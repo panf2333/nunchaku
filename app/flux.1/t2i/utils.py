@@ -1,11 +1,16 @@
+import os
+from fastapi import Request
+import logging
 import torch
 from diffusers import FluxPipeline
 from peft.tuners import lora
-from vars import LORA_PATHS, SVDQ_LORA_PATHS
+from entrypoint.openai.protocol import CreateImageRequest
+from .vars import LORA_PATHS, SVDQ_LORA_PATHS, PROMPT_TEMPLATES
 
 from nunchaku import NunchakuFluxTransformer2dModel
 from nunchaku.models.transformers.transformer_flux_v2 import NunchakuFluxTransformer2DModelV2
 
+logger = logging.getLogger(__name__)
 
 def hash_str_to_int(s: str) -> int:
     """Hash a string to an integer."""
@@ -15,11 +20,11 @@ def hash_str_to_int(s: str) -> int:
         hash_int = (hash_int * 31 + ord(char)) % modulus
     return hash_int
 
-
 def get_pipeline(
     model_name: str,
     precision: str,
     use_qencoder: bool = False,
+    use_fp16_attention: bool = False,
     lora_name: str = "None",
     lora_weight: float = 1,
     device: str | torch.device = "cuda",
@@ -37,6 +42,8 @@ def get_pipeline(
                 transformer = NunchakuFluxTransformer2dModel.from_pretrained(
                     "mit-han-lab/nunchaku-flux.1-schnell/svdq-fp4_r32-flux.1-schnell.safetensors", precision="fp4"
                 )
+            if use_fp16_attention:
+                transformer.set_attention_impl("nunchaku-fp16")
             pipeline_init_kwargs["transformer"] = transformer
             if use_qencoder:
                 from nunchaku.models.text_encoders.t5_encoder import NunchakuT5EncoderModel
@@ -110,3 +117,58 @@ def get_pipeline(
         pipeline = pipeline.to(device)
 
     return pipeline
+def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
+    state = raw_req.app.state
+    model = state.model
+    pipeline = state.pipeline
+    height = req.height if req.height != 0 else 1024
+    width = req.width if req.width != 0 else 1024
+    precision = state.precision
+    lora_name = req.lora_name
+    lora_weight = req.lora_weight
+
+    prompt = PROMPT_TEMPLATES[lora_name].format(prompt=prompt)
+    
+    if pipeline.cur_lora_name != lora_name:
+        if precision == "bf16":
+            for m in pipeline.transformer.modules():
+                if isinstance(m, lora.LoraLayer):
+                    if pipeline.cur_lora_name != "None":
+                        if pipeline.cur_lora_name in m.scaling:
+                            m.scaling[pipeline.cur_lora_name] = 0
+                    if lora_name != "None":
+                        if lora_name in m.scaling:
+                            m.scaling[lora_name] = lora_weight
+        else:
+            assert precision == "int4"
+            if lora_name != "None":
+                lora_path = LORA_PATHS[lora_name]
+                lora_path = os.path.join(lora_path["name_or_path"], lora_path["weight_name"])
+                pipeline.transformer.update_lora_params(lora_path)
+                pipeline.transformer.set_lora_strength(lora_weight)
+            else:
+                pipeline.transformer.set_lora_strength(0)
+    elif lora_name != "None":
+        if precision == "bf16":
+            if pipeline.cur_lora_weight != lora_weight:
+                for m in pipeline.transformer.modules():
+                    if isinstance(m, lora.LoraLayer):
+                        if lora_name in m.scaling:
+                            m.scaling[lora_name] = lora_weight
+        else:
+            assert precision == "int4"
+            pipeline.transformer.set_lora_strength(lora_weight)
+    pipeline.cur_lora_name = lora_name
+    pipeline.cur_lora_weight = lora_weight
+    
+
+    logger.info(f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, guidance_scale={req.guidance_scale}, num_inference_steps={req.num_inference_steps}, seed={req.seed}")
+    image = pipeline(
+        prompt=prompt,
+        height=height,
+        width=width,
+        guidance_scale=req.guidance_scale,
+        num_inference_steps=req.num_inference_steps,
+        generator=torch.Generator().manual_seed(req.seed),
+    ).images[0]
+    return image

@@ -1,5 +1,6 @@
 import asyncio
 from io import BytesIO
+import io
 import json
 import logging
 import os
@@ -11,18 +12,18 @@ from argparse import ArgumentParser, Namespace
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 import time
-from typing import Any, Optional, Literal
+from typing import Any, List, Optional
 import uuid
 
 import psutil
 import uvicorn
 import uvloop
-from fastapi import APIRouter, FastAPI, Request, UploadFile, File, Form, Depends # Added Depends
+from fastapi import APIRouter, Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import torch
-from protocol import (
+from entrypoint.openai.protocol import (
     BaseResponse,
     CreateImageRequest,
     HealthCheckResponse,
@@ -30,15 +31,19 @@ from protocol import (
     ModelStatus,
     Config,
     S3Config,
-    SketchImageRequest, # Import the new request model
 )
-from entrypoint import utils
-from entrypoint.openai.log import setup_logging
-from entrypoint.vars import PROMPT_TEMPLATES, MODEL_MAPPINGS
-from nunchaku.models.safety_checker import SafetyChecker
-import s3_util
-from dotenv import load_dotenv
+
 from PIL import Image
+from dependencies import SketchToImageParams
+from peft.tuners import lora
+
+from flux_utils import get_pipeline, generate_t2i_image, generate_i2i_image
+from entrypoint.openai.log import setup_logging
+from entrypoint.vars import MODEL_MAPPINGS
+from nunchaku.models.safety_checker import SafetyChecker
+from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
+from entrypoint.openai import s3_util
+from dotenv import load_dotenv
 
 VERSION = "1.0.0"
 TIMEOUT_KEEP_ALIVE = 180  # seconds
@@ -69,7 +74,7 @@ async def health(raw_request: Request) -> Response:
     """Health check."""
     state = raw_request.app.state
     model_status = ModelStatus(model=state.model_name, status="ok")
-    result = HealthCheckResponse(code=10000, message="success", data=[model_status])
+    result = HealthCheckResponse(code=10000, message="success", data=model_status)
     logger.info(f"Health check response {result.model_dump()}")
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
@@ -91,7 +96,7 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
             is_safe_prompt = False
             logger.info("Unsafe prompt detected")
         start_time = time.time()
-        image = generate_image(req=req, raw_req=raw_req, prompt=prompt)
+        image = generate_t2i_image(req=req, raw_req=raw_req, prompt=prompt)
         end_time = time.time()
         latency = end_time - start_time
         logger.info(f"start_time: {start_time}, end_time: {end_time}, latency: {latency}")
@@ -119,74 +124,92 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
         result = BaseResponse(code=10001, message="failed to generation image", data=[])    
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
-# Dependency to parse form data into SketchImageRequest
-async def get_sketch_image_request_params(
-    prompt: str = Form(...),
-    alpha: float = Form(0.28),
-    seed: int = Form(233),
-    image_type: Literal["sketch"] = Form("sketch"),
-) -> SketchImageRequest:
-    return SketchImageRequest(
-        prompt=prompt,
-        alpha=alpha,
-        seed=seed,
-        image_type=image_type,
-    )
 
-@router.post("/v1/images/sketch-generations")
-async def sketchImagesGenerations(
-    image: UploadFile = File(...),
-    sketch_req: SketchImageRequest = Depends(get_sketch_image_request_params),
-    raw_req: Request = Request,
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# +++ NEW ENDPOINT FOR SKETCH-TO-IMAGE BASED ON GRADIO 'RUN'
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+@router.post("/v1/images/edits")
+async def sketch_to_image(
+    raw_req: Request,
+    # This is the main change: accepting a list of UploadFile objects
+    images: List[UploadFile] = File(...),
+    # The endpoint now looks even cleaner!
+    req: SketchToImageParams = Depends(),
 ) -> Response:
+    """
+    Generates an image from a sketch and a text prompt.
+    This endpoint accepts multipart/form-data.
+    """
     state = raw_req.app.state
-    is_safe_prompt = True
-    logger.info(f"sketchImagesGenerations received: prompt={sketch_req.prompt}, alpha={sketch_req.alpha}, seed={sketch_req.seed}, image_type={sketch_req.image_type}")
+    logger.info(f"Received image edit request with {len(images)} images.")
+    logger.info(f"Request parameters: {req}") # Python automatically calls req.__repr__()
 
     try:
-        image_content = await image.read()
-        pil_image = Image.open(BytesIO(image_content)).convert("RGB")
-
-        if not state.safety_checker(sketch_req.prompt):
-            sketch_req.prompt = "A peaceful world."
+        # 2. Safety check for the prompt
+        is_safe_prompt = True
+        # Access prompt directly from req object
+        prompt_for_safety_check = req.prompt
+        if not state.safety_checker(prompt_for_safety_check):
+            req.prompt = "A peaceful world." # Modify req.prompt directly
             is_safe_prompt = False
-            logger.info("Unsafe prompt detected")
+            logger.info("Unsafe prompt detected, using default.")
         
+        input_images = {}
+        for image in images:
+            # Get the filename to differentiate the images
+            image_name_with_extension = image.filename
+            image_name = os.path.splitext(image_name_with_extension)[0] # Remove extension
+            logger.info(f"Processing file: {image_name}")
+
+            # Read file content and convert to a PIL Image
+            contents = await image.read()
+            pil_image = Image.open(io.BytesIO(contents))
+            
+            # Store the image in the dictionary
+            input_images[image_name] = pil_image
+
+        # --- Using the differentiated images ---
+
+
+        # 3. Run the pipeline (core logic from Gradio's run function)
         start_time = time.time()
-        result_image = generate_sketch_image(
-            image=pil_image,
-            prompt=sketch_req.prompt,
-            alpha=sketch_req.alpha,
-            seed=sketch_req.seed,
-            raw_req=raw_req,
-        )
+        result_image = generate_i2i_image(req=req, raw_req=raw_req, images=input_images)
         end_time = time.time()
         latency = end_time - start_time
-        logger.info(f"start_time: {start_time}, end_time: {end_time}, latency: {latency}")
-
+        logger.info(f"Image generation latency: {latency:.4f}s")
+        
+        # 4. Convert result to bytes for response/upload
         image_bytes = BytesIO()
         result_image.save(image_bytes, format="PNG")
         image_bytes.seek(0)
 
     except Exception as e:
-        logger.exception(f"sketchImagesGenerations failed: {e}")
-        result = BaseResponse(code=10001, message="failed to generate sketch image", data=[])
+        logger.exception(f"images edits failed: {e}")
+        result = BaseResponse(code=10001, message="Failed to generate image", data=[])    
         return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
     finally:
-        del result_image
+        # 5. Clean up CUDA memory
         torch.cuda.empty_cache()
 
+    # 6. Upload to S3 and generate presigned URL
     s3Config: S3Config = state.config.s3
-    object_name = s3Config.prefix_path + f"{state.model}-{state.precision}-sketch-{uuid.uuid4()}.png"
+    object_name = s3Config.prefix_path + f"edit-{state.model}-{state.precision}-{uuid.uuid4()}.png"
     s3_client = state.s3_client
 
     url = s3_util.upload_file_and_get_presigned_url(s3_client, s3Config.bucket, object_name, image_bytes)
+    
     if url is not None:
         image_response = ImageResponse(url=url, latency=latency, is_safe_prompt=is_safe_prompt)
         result = BaseResponse(code=10000, message="success", data=[image_response])
+        status_code = HTTPStatus.OK
     else:
-        result = BaseResponse(code=10001, message="failed to generate sketch image", data=[])
-    return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
+        result = BaseResponse(code=10001, message="Failed to upload generated image", data=[])
+        status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+        
+    return JSONResponse(content=result.model_dump(), status_code=status_code)
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# +++ END OF NEW ENDPOINT
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
 def build_app(args: Namespace) -> FastAPI:
@@ -222,9 +245,12 @@ async def run_server(args, **uvicorn_kwargs) -> None:
 
     signal.signal(signal.SIGTERM, signal_handler)
     app = build_app(args)
-    pipeline = utils.get_pipeline(args)
+    pipeline, processor = get_pipeline(args=args)
+
     logger.info("Loaded pipeline")
-    init_app_state(app.state, pipeline, args)
+    app.state.pipeline = pipeline
+    app.state.processor = processor
+    init_app_state(app.state, args)
     logger.info("Initialized app state")
     shutdown_task = await serve_http(
         app,
@@ -322,57 +348,6 @@ def set_ulimit(target_soft_limit=65535):
                 "`OSError: [Errno 24] Too many open files`. Consider "
                 "increasing with ulimit -n", current_soft, e)
 
-def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
-    state = raw_req.app.state
-    model = state.model
-    pipeline = state.pipeline
-    height = req.height if req.height != 0 else 1024
-    width = req.width if req.width != 0 else 1024
-    pag_scale = req.pag_scale if req.pag_scale != 0 else 2.0
-    if model in ["schnell", "dev"]:
-        lora_name = state.lora_name
-        prompt = PROMPT_TEMPLATES[lora_name].format(prompt=prompt)
-        logger.info(f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, num_inference_steps={req.num_inference_steps}, guidance_scale={req.guidance_scale} seed={req.seed}")
-        image = pipeline(
-            prompt=prompt,
-            height=height,
-            width=width,
-            num_inference_steps=req.num_inference_steps,
-            guidance_scale=req.guidance_scale,
-            generator=torch.Generator().manual_seed(req.seed),
-        ).images[0]
-    elif model in ["sana"]:
-        logger.info(f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, guidance_scale={req.guidance_scale}, pag_scale={pag_scale}, num_inference_steps={req.num_inference_steps}, seed={req.seed}")
-        image = pipeline(
-            prompt=prompt,
-            height=height,
-            width=width,
-            guidance_scale=req.guidance_scale,
-            pag_scale=pag_scale,
-            num_inference_steps=req.num_inference_steps,
-            generator=torch.Generator().manual_seed(req.seed),
-        ).images[0]
-    return image
-
-def generate_sketch_image(image: Image.Image, prompt: str, alpha: float, seed: int, raw_req: Request):
-    state = raw_req.app.state
-    model = state.model
-    pipeline = state.pipeline
-    
-    # Assuming the pipeline for sketch generation is also available via state.pipeline
-    # and it can handle 'image_type="sketch"' and 'alpha' parameters.
-    # This part might need adjustment based on the actual pipeline implementation.
-    logger.info(f"generate_sketch_image: model={model}, prompt={prompt}, alpha={alpha}, seed={seed}")
-    result_image = pipeline(
-        image=image,
-        image_type="sketch",
-        alpha=alpha,
-        prompt=prompt,
-        generator=torch.Generator().manual_seed(seed),
-    ).images[0]
-    return result_image
-
-
 def read_config():
     load_dotenv()
     bucket = os.getenv("S3_BUCKET")
@@ -401,11 +376,10 @@ def read_config():
     config = Config(s3=s3, safe_check_url=safe_check_url)
     return config
 
-def init_app_state(app_state, pipeline, args):
+def init_app_state(app_state, args):
     app_state.model = args.model
     app_state.precision = args.precision
     app_state.model_name = MODEL_MAPPINGS[app_state.model][app_state.precision]
-    app_state.pipeline = pipeline
     app_state.lora_name = args.lora_name
     logger.info("load config")
     app_state.config = read_config()
@@ -416,30 +390,24 @@ def init_app_state(app_state, pipeline, args):
     logger.info("end init safety checker")
 
 def mark_args(parser: ArgumentParser) -> None:
-    # "canny", "depth"  app/flux.1/depth_canny/utils.py
     parser.add_argument(
-        "-m", "--model", type=str, default="schnell", choices=["schnell", "dev", "sana", "canny", "depth"], help="Which model to use"
+        "-m", "--model", type=str, default="schnell", choices=["schnell", "dev", "sana", "schnell_sketch", "kontext", "fill","canny", "depth"], help="Which model to use"
     )
     parser.add_argument(
-        "-p",
-        "--precision",
-        type=str,
-        default="int4",
-        choices=["int4", "bf16", "fp4"],
-        help="Which precisions to use",
+        "-p", "--precision", type=str, default="int4", choices=["int4", "fp4", "bf16"], help="Which precisions to use"
     )
-    parser.add_argument("--device", type=str, default="cuda")
+    
     parser.add_argument("--use-fp16-attention", action="store_true", help="Whether to use nunchaku fp16 attention", default=False)
-    parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder", default=False)
+    parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder")
+    parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker")
+    parser.add_argument("--count-use", action="store_true", help="Whether to count the number of uses")
     parser.add_argument("--lora-name", default="All", choices=["None", "All", "Anime", "GHIBSKY Illustration", "Realism", "Yarn Art", "Children Sketch"])
     parser.add_argument("--lora-weight", type=float, default=1.0)
-    parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker", default=False)
 
     parser.add_argument("--allowed-origins", type=list, default=["*"])
     parser.add_argument("--allow-credentials", type=bool, default=True)
     parser.add_argument("--allowed-methods", type=list, default=["*"])
     parser.add_argument("--allowed-headers", type=list, default=["*"])
-
 
 if __name__ == "__main__":
     parser = ArgumentParser()

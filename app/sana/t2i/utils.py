@@ -16,6 +16,7 @@ def hash_str_to_int(s: str) -> int:
 def get_pipeline(
     precision: str, use_qencoder: bool = False, device: str | torch.device = "cuda", pipeline_init_kwargs: dict = {}
 ) -> SanaPAGPipeline:
+    print(f"Using precision {precision}")
     if precision == "int4":
         assert torch.device(device).type == "cuda", "int4 only supported on CUDA devices"
         transformer = NunchakuSanaTransformer2DModel.from_pretrained("mit-han-lab/svdq-int4-sana-1600m", pag_layers=8)

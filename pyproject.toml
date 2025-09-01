@@ -20,6 +20,17 @@ dependencies = [
     "sentencepiece",
     "protobuf",
     "huggingface_hub",
+    "fastapi",
+    "uvicorn", # Added uvicorn
+    "uvloop",
+    "boto3",
+    "beautifulsoup4",
+    "python-dotenv",
+    "peft",
+    "controlnet_aux",
+    "einops",
+    "mediapipe",
+    "image_gen_aux @ git+https://github.com/asomoza/image_gen_aux.git",
 ]
 requires-python = ">=3.10"
 

@@ -11,18 +11,18 @@ from argparse import ArgumentParser, Namespace
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 import time
-from typing import Any, Optional, Literal
+from typing import Any, Optional
 import uuid
 
 import psutil
 import uvicorn
 import uvloop
-from fastapi import APIRouter, FastAPI, Request, UploadFile, File, Form, Depends # Added Depends
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import torch
-from protocol import (
+from entrypoint.openai.protocol import (
     BaseResponse,
     CreateImageRequest,
     HealthCheckResponse,
@@ -30,15 +30,19 @@ from protocol import (
     ModelStatus,
     Config,
     S3Config,
-    SketchImageRequest, # Import the new request model
 )
-from entrypoint import utils
+
+from diffusers import FluxPipeline
+from peft.tuners import lora
+
+from vars import LORA_PATHS, PROMPT_TEMPLATES
+
+from utils import get_pipeline
 from entrypoint.openai.log import setup_logging
-from entrypoint.vars import PROMPT_TEMPLATES, MODEL_MAPPINGS
+from entrypoint.vars import MODEL_MAPPINGS
 from nunchaku.models.safety_checker import SafetyChecker
-import s3_util
+from entrypoint.openai import s3_util
 from dotenv import load_dotenv
-from PIL import Image
 
 VERSION = "1.0.0"
 TIMEOUT_KEEP_ALIVE = 180  # seconds
@@ -69,7 +73,7 @@ async def health(raw_request: Request) -> Response:
     """Health check."""
     state = raw_request.app.state
     model_status = ModelStatus(model=state.model_name, status="ok")
-    result = HealthCheckResponse(code=10000, message="success", data=[model_status])
+    result = HealthCheckResponse(code=10000, message="success", data=model_status)
     logger.info(f"Health check response {result.model_dump()}")
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
@@ -119,76 +123,6 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
         result = BaseResponse(code=10001, message="failed to generation image", data=[])    
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
-# Dependency to parse form data into SketchImageRequest
-async def get_sketch_image_request_params(
-    prompt: str = Form(...),
-    alpha: float = Form(0.28),
-    seed: int = Form(233),
-    image_type: Literal["sketch"] = Form("sketch"),
-) -> SketchImageRequest:
-    return SketchImageRequest(
-        prompt=prompt,
-        alpha=alpha,
-        seed=seed,
-        image_type=image_type,
-    )
-
-@router.post("/v1/images/sketch-generations")
-async def sketchImagesGenerations(
-    image: UploadFile = File(...),
-    sketch_req: SketchImageRequest = Depends(get_sketch_image_request_params),
-    raw_req: Request = Request,
-) -> Response:
-    state = raw_req.app.state
-    is_safe_prompt = True
-    logger.info(f"sketchImagesGenerations received: prompt={sketch_req.prompt}, alpha={sketch_req.alpha}, seed={sketch_req.seed}, image_type={sketch_req.image_type}")
-
-    try:
-        image_content = await image.read()
-        pil_image = Image.open(BytesIO(image_content)).convert("RGB")
-
-        if not state.safety_checker(sketch_req.prompt):
-            sketch_req.prompt = "A peaceful world."
-            is_safe_prompt = False
-            logger.info("Unsafe prompt detected")
-        
-        start_time = time.time()
-        result_image = generate_sketch_image(
-            image=pil_image,
-            prompt=sketch_req.prompt,
-            alpha=sketch_req.alpha,
-            seed=sketch_req.seed,
-            raw_req=raw_req,
-        )
-        end_time = time.time()
-        latency = end_time - start_time
-        logger.info(f"start_time: {start_time}, end_time: {end_time}, latency: {latency}")
-
-        image_bytes = BytesIO()
-        result_image.save(image_bytes, format="PNG")
-        image_bytes.seek(0)
-
-    except Exception as e:
-        logger.exception(f"sketchImagesGenerations failed: {e}")
-        result = BaseResponse(code=10001, message="failed to generate sketch image", data=[])
-        return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
-    finally:
-        del result_image
-        torch.cuda.empty_cache()
-
-    s3Config: S3Config = state.config.s3
-    object_name = s3Config.prefix_path + f"{state.model}-{state.precision}-sketch-{uuid.uuid4()}.png"
-    s3_client = state.s3_client
-
-    url = s3_util.upload_file_and_get_presigned_url(s3_client, s3Config.bucket, object_name, image_bytes)
-    if url is not None:
-        image_response = ImageResponse(url=url, latency=latency, is_safe_prompt=is_safe_prompt)
-        result = BaseResponse(code=10000, message="success", data=[image_response])
-    else:
-        result = BaseResponse(code=10001, message="failed to generate sketch image", data=[])
-    return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
-
-
 def build_app(args: Namespace) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.include_router(router)
@@ -222,7 +156,8 @@ async def run_server(args, **uvicorn_kwargs) -> None:
 
     signal.signal(signal.SIGTERM, signal_handler)
     app = build_app(args)
-    pipeline = utils.get_pipeline(args)
+    pipeline = load_pipeline(args)
+
     logger.info("Loaded pipeline")
     init_app_state(app.state, pipeline, args)
     logger.info("Initialized app state")
@@ -328,50 +263,55 @@ def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
     pipeline = state.pipeline
     height = req.height if req.height != 0 else 1024
     width = req.width if req.width != 0 else 1024
-    pag_scale = req.pag_scale if req.pag_scale != 0 else 2.0
-    if model in ["schnell", "dev"]:
-        lora_name = state.lora_name
-        prompt = PROMPT_TEMPLATES[lora_name].format(prompt=prompt)
-        logger.info(f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, num_inference_steps={req.num_inference_steps}, guidance_scale={req.guidance_scale} seed={req.seed}")
-        image = pipeline(
-            prompt=prompt,
-            height=height,
-            width=width,
-            num_inference_steps=req.num_inference_steps,
-            guidance_scale=req.guidance_scale,
-            generator=torch.Generator().manual_seed(req.seed),
-        ).images[0]
-    elif model in ["sana"]:
-        logger.info(f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, guidance_scale={req.guidance_scale}, pag_scale={pag_scale}, num_inference_steps={req.num_inference_steps}, seed={req.seed}")
-        image = pipeline(
-            prompt=prompt,
-            height=height,
-            width=width,
-            guidance_scale=req.guidance_scale,
-            pag_scale=pag_scale,
-            num_inference_steps=req.num_inference_steps,
-            generator=torch.Generator().manual_seed(req.seed),
-        ).images[0]
-    return image
+    precision = state.precision
+    lora_name = req.lora_name
+    lora_weight = req.lora_weight
 
-def generate_sketch_image(image: Image.Image, prompt: str, alpha: float, seed: int, raw_req: Request):
-    state = raw_req.app.state
-    model = state.model
-    pipeline = state.pipeline
+    prompt = PROMPT_TEMPLATES[lora_name].format(prompt=prompt)
     
-    # Assuming the pipeline for sketch generation is also available via state.pipeline
-    # and it can handle 'image_type="sketch"' and 'alpha' parameters.
-    # This part might need adjustment based on the actual pipeline implementation.
-    logger.info(f"generate_sketch_image: model={model}, prompt={prompt}, alpha={alpha}, seed={seed}")
-    result_image = pipeline(
-        image=image,
-        image_type="sketch",
-        alpha=alpha,
-        prompt=prompt,
-        generator=torch.Generator().manual_seed(seed),
-    ).images[0]
-    return result_image
+    if pipeline.cur_lora_name != lora_name:
+        if precision == "bf16":
+            for m in pipeline.transformer.modules():
+                if isinstance(m, lora.LoraLayer):
+                    if pipeline.cur_lora_name != "None":
+                        if pipeline.cur_lora_name in m.scaling:
+                            m.scaling[pipeline.cur_lora_name] = 0
+                    if lora_name != "None":
+                        if lora_name in m.scaling:
+                            m.scaling[lora_name] = lora_weight
+        else:
+            assert precision == "int4"
+            if lora_name != "None":
+                lora_path = LORA_PATHS[lora_name]
+                lora_path = os.path.join(lora_path["name_or_path"], lora_path["weight_name"])
+                pipeline.transformer.update_lora_params(lora_path)
+                pipeline.transformer.set_lora_strength(lora_weight)
+            else:
+                pipeline.transformer.set_lora_strength(0)
+    elif lora_name != "None":
+        if precision == "bf16":
+            if pipeline.cur_lora_weight != lora_weight:
+                for m in pipeline.transformer.modules():
+                    if isinstance(m, lora.LoraLayer):
+                        if lora_name in m.scaling:
+                            m.scaling[lora_name] = lora_weight
+        else:
+            assert precision == "int4"
+            pipeline.transformer.set_lora_strength(lora_weight)
+    pipeline.cur_lora_name = lora_name
+    pipeline.cur_lora_weight = lora_weight
+    
 
+    logger.info(f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, guidance_scale={req.guidance_scale}, num_inference_steps={req.num_inference_steps}, seed={req.seed}")
+    image = pipeline(
+        prompt=prompt,
+        height=height,
+        width=width,
+        guidance_scale=req.guidance_scale,
+        num_inference_steps=req.num_inference_steps,
+        generator=torch.Generator().manual_seed(req.seed),
+    ).images[0]
+    return image
 
 def read_config():
     load_dotenv()
@@ -403,10 +343,9 @@ def read_config():
 
 def init_app_state(app_state, pipeline, args):
     app_state.model = args.model
-    app_state.precision = args.precision
+    app_state.precision = args.precisions
     app_state.model_name = MODEL_MAPPINGS[app_state.model][app_state.precision]
     app_state.pipeline = pipeline
-    app_state.lora_name = args.lora_name
     logger.info("load config")
     app_state.config = read_config()
     logger.info("get config done")
@@ -416,30 +355,40 @@ def init_app_state(app_state, pipeline, args):
     logger.info("end init safety checker")
 
 def mark_args(parser: ArgumentParser) -> None:
-    # "canny", "depth"  app/flux.1/depth_canny/utils.py
     parser.add_argument(
-        "-m", "--model", type=str, default="schnell", choices=["schnell", "dev", "sana", "canny", "depth"], help="Which model to use"
+        "-m", "--model", type=str, default="schnell", choices=["schnell", "dev"], help="Which FLUX.1 model to use"
     )
     parser.add_argument(
         "-p",
-        "--precision",
+        "--precisions",
         type=str,
         default="int4",
-        choices=["int4", "bf16", "fp4"],
+        choices=["int4", "fp4", "bf16"],
         help="Which precisions to use",
     )
-    parser.add_argument("--device", type=str, default="cuda")
+    
     parser.add_argument("--use-fp16-attention", action="store_true", help="Whether to use nunchaku fp16 attention", default=False)
-    parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder", default=False)
-    parser.add_argument("--lora-name", default="All", choices=["None", "All", "Anime", "GHIBSKY Illustration", "Realism", "Yarn Art", "Children Sketch"])
-    parser.add_argument("--lora-weight", type=float, default=1.0)
-    parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker", default=False)
+    parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder")
+    parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker")
+    parser.add_argument("--count-use", action="store_true", help="Whether to count the number of uses")
 
     parser.add_argument("--allowed-origins", type=list, default=["*"])
     parser.add_argument("--allow-credentials", type=bool, default=True)
     parser.add_argument("--allowed-methods", type=list, default=["*"])
     parser.add_argument("--allowed-headers", type=list, default=["*"])
 
+def load_pipeline(args) -> FluxPipeline:
+    pipeline = get_pipeline(
+        model_name=args.model,
+        precision=args.precisions,
+        use_qencoder=args.use_qencoder,
+        use_fp16_attention=args.use_fp16_attention,
+        device="cuda",
+        lora_name="All",
+    )
+    pipeline.cur_lora_name = "None"
+    pipeline.cur_lora_weight = 0
+    return pipeline
 
 if __name__ == "__main__":
     parser = ArgumentParser()

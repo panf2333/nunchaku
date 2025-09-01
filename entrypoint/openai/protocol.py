@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Literal
 
 ########################### request ########################
 class CreateImageRequest(BaseModel):
@@ -12,6 +13,16 @@ class CreateImageRequest(BaseModel):
     seed: int = 0
     # sana
     pag_scale: float = 2.0
+
+class SketchImageRequest(BaseModel):
+    # 图片将通过 multipart/form-data 直接处理，不在此模型中
+    image_type: Literal["sketch"] = "sketch"
+    alpha: float = 0.28 # Corresponds to sketch_guidance
+    prompt: str
+    seed: int = 233
+
+    num_inference_steps: int
+    guidance_scale: float = 2.5
 
 #### safe check request ####
 # Define a request model for the /safety/check/prompt endpoint
