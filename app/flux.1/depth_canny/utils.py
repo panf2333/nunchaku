@@ -93,7 +93,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
         composite = images["composite"]
         if composite.mode != 'RGB':
             composite = composite.convert('RGB')
-        processed_img = processor(composite)[0]
+        processed_img = processor(composite)[0].convert("RGB")
 
     return pipeline(
         prompt=req.prompt,
