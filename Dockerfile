@@ -32,6 +32,9 @@ ENV PATH="/root/miniconda3/envs/image/bin:$PATH"
 RUN pip install torch torchvision torchaudio && \
     pip install diffusers ninja wheel transformers accelerate sentencepiece protobuf && \
     pip install huggingface_hub peft opencv-python einops gradio spaces GPUtil && \
+    ## https://github.com/nunchaku-tech/nunchaku/tree/main/app/flux.1/depth_canny
+    pip install git+https://github.com/asomoza/image_gen_aux.git && \
+    pip install controlnet_aux mediapipe && \
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 &&\ 
     conda install -c conda-forge gxx=11 gcc=11
 
