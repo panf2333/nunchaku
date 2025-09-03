@@ -13,12 +13,14 @@ class SketchToImageParams:
         num_inference_steps: int = Form(10),
         guidance_scale: float = Form(2.5),
         seed: int = Form(233),
+        styles: str = Form("None"),
     ):
         self.prompt = prompt
         self.sketch_guidance = sketch_guidance
         self.seed = seed
         self.num_inference_steps = num_inference_steps
         self.guidance_scale = guidance_scale
+        self.styles = styles
     
     # --- ADD THIS METHOD ---
     def __repr__(self) -> str:

@@ -5,7 +5,7 @@ from PIL import Image
 import torch
 from diffusers import FluxFillPipeline
 from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
-from .vars import MAX_SEED
+from .vars import MAX_SEED, STYLES
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -50,6 +50,9 @@ def get_pipeline(args) -> FluxFillPipeline:
 def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     pipeline = raw_req.app.state.pipeline
 
+    prompt_template = STYLES[req.styles]
+    prompt = prompt_template.format(prompt=prompt)
+    
     # Validate req.seed
     if not (0 <= req.seed <= MAX_SEED):
         raise ValueError(f"Seed must be between 0 and {MAX_SEED}.")

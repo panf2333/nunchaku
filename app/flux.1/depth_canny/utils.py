@@ -8,7 +8,7 @@ from image_gen_aux import DepthPreprocessor
 from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
 from typing import Dict
 from PIL import Image
-from .vars import MAX_SEED, HEIGHT, WIDTH
+from .vars import MAX_SEED, HEIGHT, STYLES, WIDTH
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -71,6 +71,10 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     pipeline = raw_req.app.state.pipeline
     processor = raw_req.app.state.processor
     model = raw_req.app.state.model
+
+    prompt_template = STYLES[req.styles]
+    prompt = prompt_template.format(prompt=prompt)
+    
     # Validate req.seed
     if not (0 <= req.seed <= MAX_SEED):
         raise ValueError(f"Seed must be between 0 and {MAX_SEED}.")

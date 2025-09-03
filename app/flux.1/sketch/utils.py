@@ -7,7 +7,7 @@ import numpy as np
 from .flux_pix2pix_pipeline import FluxPix2pixTurboPipeline
 import torch
 from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
-from .vars import DEFAULT_SKETCH_GUIDANCE, MAX_SEED
+from .vars import DEFAULT_SKETCH_GUIDANCE, MAX_SEED, STYLES
 from PIL import Image
 
 blank_image = Image.new("RGB", (1024, 1024), (255, 255, 255))
@@ -69,6 +69,9 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     image_numpy = np.array(image.convert("RGB"))
     if prompt.strip() == "" and (np.sum(image_numpy == 255) >= 3145628 or np.sum(image_numpy == 0) >= 3145628):
         return blank_image, "Please input the prompt or draw something."
+    
+    prompt_template = STYLES[req.styles]
+    prompt = prompt_template.format(prompt=prompt)
 
     # Validate req.seed
     if not (0 <= req.seed <= MAX_SEED):
