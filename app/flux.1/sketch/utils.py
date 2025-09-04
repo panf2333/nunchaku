@@ -1,4 +1,6 @@
 import argparse
+import logging
+from entrypoint.openai.log import setup_logging
 from typing import Dict
 
 from fastapi import Request
@@ -11,6 +13,10 @@ from .vars import DEFAULT_SKETCH_GUIDANCE, MAX_SEED, STYLES
 from PIL import Image
 
 blank_image = Image.new("RGB", (1024, 1024), (255, 255, 255))
+
+setup_logging()
+
+logger = logging.getLogger(__name__)
 
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -72,7 +78,6 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     
     prompt_template = STYLES[req.styles]
     prompt = prompt_template.format(prompt=prompt)
-
     # Validate req.seed
     if not (0 <= req.seed <= MAX_SEED):
         raise ValueError(f"Seed must be between 0 and {MAX_SEED}.")
@@ -84,7 +89,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     # Using a small epsilon for float comparison due to potential precision issues
     if abs(req.sketch_guidance * 100 - round(req.sketch_guidance * 100)) > 1e-6:
         raise ValueError("Sketch guidance must be a multiple of 0.01.")
-
+    logger.info(f"Prompt: {prompt}, alpha: {req.sketch_guidance}, seed: {req.seed}")
     return pipeline(
         image=image,
         image_type="sketch",

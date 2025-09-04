@@ -1,12 +1,19 @@
 import argparse
+import logging
 from typing import Dict
 from fastapi import Request
 from PIL import Image
 import torch
 from diffusers import FluxKontextPipeline
 
+from entrypoint.openai.log import setup_logging
 from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
 from .vars import MAX_SEED
+
+setup_logging()
+
+logger = logging.getLogger(__name__)
+
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -67,7 +74,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     # Validate step for guidance_scale (0.1)
     if abs(req.guidance_scale * 10 - round(req.guidance_scale * 10)) > 1e-6:
         raise ValueError("Guidance scale must be a multiple of 0.1.")
-
+    logger.info(f"prompt: {req.prompt}, Guidance scale: {req.guidance_scale}, requested seed: {req.seed}, num_inference_steps: {req.num_inference_steps}, height: {img.height}, width: {img.width}")
     return pipeline(
         prompt=req.prompt,
         image=img,

@@ -1,11 +1,19 @@
 import argparse
+import logging
 from typing import Dict
 from fastapi import Request
 from PIL import Image
 import torch
 from diffusers import FluxFillPipeline
+from entrypoint.openai.log import setup_logging
 from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
 from .vars import MAX_SEED, STYLES
+
+setup_logging()
+
+logger = logging.getLogger(__name__)
+
+
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -51,7 +59,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     pipeline = raw_req.app.state.pipeline
 
     prompt_template = STYLES[req.styles]
-    prompt = prompt_template.format(prompt=prompt)
+    prompt = prompt_template.format(prompt=req.prompt)
     
     # Validate req.seed
     if not (0 <= req.seed <= MAX_SEED):
@@ -71,8 +79,9 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     mask = images["layer_0"].getchannel(3)  # Mask is stored in the last channel
     pic = images["background"].convert("RGB")  # This is the original photo
 
+    logger.info(f"Prompt: {prompt}, guidance_scale: {req.guidance_scale}, seed: {req.seed}, num_inference_steps: {req.num_inference_steps}")
     return pipeline(
-        prompt=req.prompt,
+        prompt=prompt,
         image=pic,
         mask_image=mask,
         guidance_scale=req.guidance_scale,

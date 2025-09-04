@@ -1,14 +1,22 @@
 import argparse
+import logging
 from fastapi import Request
 import torch
 from controlnet_aux import CannyDetector
 from diffusers import FluxControlPipeline
 from image_gen_aux import DepthPreprocessor
 
+from entrypoint.openai.log import setup_logging
 from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
 from typing import Dict
 from PIL import Image
 from .vars import MAX_SEED, HEIGHT, STYLES, WIDTH
+
+setup_logging()
+
+logger = logging.getLogger(__name__)
+
+
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -73,7 +81,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     model = raw_req.app.state.model
 
     prompt_template = STYLES[req.styles]
-    prompt = prompt_template.format(prompt=prompt)
+    prompt = prompt_template.format(prompt=req.prompt)
     
     # Validate req.seed
     if not (0 <= req.seed <= MAX_SEED):
@@ -99,8 +107,9 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
             composite = composite.convert('RGB')
         processed_img = processor(composite)[0].convert("RGB")
 
+    logger.info(f"Prompt: {prompt}, num_inference_steps: {req.num_inference_steps}, guidance_scale: {req.guidance_scale}, seed: {req.seed}")
     return pipeline(
-        prompt=req.prompt,
+        prompt=prompt,
         control_image=processed_img,
         height=HEIGHT,
         width=WIDTH,

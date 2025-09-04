@@ -1,55 +1,64 @@
-FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
+# Stage 1: Build Environment
+FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04 AS build
 
 WORKDIR /app
 
+# Install build dependencies
 RUN apt-get update && \
-    apt-get install -y \
-    build-essential \
-    cmake \
-    git \
-    wget \
-    libgl1-mesa-glx \
-    libglib2.0-0 
+    apt-get install -y --no-install-recommends \
+    build-essential cmake git wget libgl1-mesa-glx libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /root/miniconda3 && \
-    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /root/miniconda3/miniconda.sh && \
-    bash /root/miniconda3/miniconda.sh -b -u -p /root/miniconda3 && \
-    rm -rf /root/miniconda3/miniconda.sh && \
-    . /root/miniconda3/etc/profile.d/conda.sh && \
-    conda init bash
+# Install Miniconda
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh && \
+    bash miniconda.sh -b -p /opt/conda && \
+    rm miniconda.sh
 
-ENV PATH="/root/miniconda3/bin:$PATH"
+# Set up Conda environment
+ENV PATH="/opt/conda/bin:$PATH"
 
 # Add this line to accept the Conda Terms of Service
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
+RUN conda create -n image python=3.11 -y
 
-RUN conda create -n image python=3.11 && \
-    conda clean -afy
-
-ENV PATH="/root/miniconda3/envs/image/bin:$PATH"
-
-RUN pip install torch torchvision torchaudio && \
-    pip install diffusers ninja wheel transformers accelerate sentencepiece protobuf && \
-    pip install huggingface_hub peft opencv-python einops gradio spaces GPUtil && \
-    ## https://github.com/nunchaku-tech/nunchaku/tree/main/app/flux.1/depth_canny
-    pip install git+https://github.com/asomoza/image_gen_aux.git && \
-    pip install controlnet_aux mediapipe && \
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 &&\ 
-    conda install -c conda-forge gxx=11 gcc=11
-
-ENV MAX_JOBS=8
-
-COPY . /app
-
+# Install Python packages
+ENV PATH="/opt/conda/envs/image/bin:$PATH"
 # Add this line with your GPU's compute capability
 # https://developer.nvidia.com/cuda-gpus
 ENV NUNCHAKU_INSTALL_MODE="ALL"
 
-RUN git submodule init && \
-    git submodule update && \
-    python3 setup.py develop
+COPY . /app
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 && \
+    pip install --no-cache-dir diffusers ninja wheel transformers accelerate sentencepiece protobuf && \
+    pip install --no-cache-dir huggingface_hub peft opencv-python einops gradio spaces GPUtil psutil && \
+    pip install --no-cache-dir git+https://github.com/asomoza/image_gen_aux.git && \
+    pip install --no-cache-dir controlnet_aux mediapipe && \
+    conda install -c conda-forge gxx=11 gcc=11 -y && \
+    git submodule init && \
+    git submodule update
+
+RUN python3 setup.py develop
+
+# Stage 2: Final Runtime
+FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu22.04
+
+WORKDIR /app
+
+# Copy the environment from the build stage
+COPY --from=build /opt/conda /opt/conda
+
+ENV PATH="/opt/conda/envs/image/bin:$PATH"
+ENV PATH="/opt/conda/bin:$PATH"
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential cmake git wget libgl1-mesa-glx libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app /app
 
 COPY entrypoint.sh /entrypoint.sh
 
