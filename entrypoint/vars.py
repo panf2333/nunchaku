@@ -20,7 +20,7 @@ MODEL_MAPPINGS = {
         "bf16": "Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers"
     },
     "schnell_sketch": {
-        "fp4": "mit-han-lab/nunchaku-flux.1-schnell/svdq-fp4_r32-flux.1-schnell"
+        "fp4": "mit-han-lab/nunchaku-flux.1-schnell/svdq-fp4_r32-flux.1-schnell-sketch"
     },
     "kontext": {
         "fp4": "mit-han-lab/nunchaku-flux.1-kontext-dev/svdq-fp4_r32-flux.1-kontext-dev"
