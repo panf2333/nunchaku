@@ -1,48 +1,45 @@
 import asyncio
-from io import BytesIO
-import json
 import logging
 import os
 import resource
 import signal
 import sys
 import tempfile
+import time
+import uuid
 from argparse import ArgumentParser, Namespace
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-import time
+from io import BytesIO
 from typing import Any, Optional
-import uuid
 
 import psutil
+import torch
 import uvicorn
 import uvloop
+from diffusers import FluxPipeline
+from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-import torch
+from peft.tuners import lora
+from utils import get_pipeline
+from vars import LORA_PATHS, PROMPT_TEMPLATES
+
+from entrypoint.openai import s3_util
+from entrypoint.openai.log import setup_logging
 from entrypoint.openai.protocol import (
     BaseResponse,
+    Config,
     CreateImageRequest,
     HealthCheckResponse,
     ImageResponse,
     ModelStatus,
-    Config,
     S3Config,
 )
-
-from diffusers import FluxPipeline
-from peft.tuners import lora
-
-from vars import LORA_PATHS, PROMPT_TEMPLATES
-
-from utils import get_pipeline
-from entrypoint.openai.log import setup_logging
 from entrypoint.vars import MODEL_MAPPINGS
 from nunchaku.models.safety_checker import SafetyChecker
-from entrypoint.openai import s3_util
-from dotenv import load_dotenv
 
 VERSION = "1.0.0"
 TIMEOUT_KEEP_ALIVE = 180  # seconds
@@ -56,17 +53,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         logger.info("start server")
         yield
-        
+
     finally:
         # Ensure app state including engine ref is gc'd
         torch.cuda.empty_cache()
         logger.info("stop server empty cuda")
         del app.state
+
 
 @router.get("/health")
 async def health(raw_request: Request) -> Response:
@@ -77,10 +76,12 @@ async def health(raw_request: Request) -> Response:
     logger.info(f"Health check response {result.model_dump()}")
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
 
+
 @router.get("/version")
 async def show_version():
     version = {"version": VERSION}
     return JSONResponse(content=version)
+
 
 @router.api_route("/v1/images/generations", methods=["GET", "POST"])
 async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Response:
@@ -99,13 +100,13 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
         end_time = time.time()
         latency = end_time - start_time
         logger.info(f"start_time: {start_time}, end_time: {end_time}, latency: {latency}")
-        
+
         image_bytes = BytesIO()
         image.save(image_bytes, format="PNG")
         image_bytes.seek(0)
     except Exception as e:
         logger.exception(f"imagesGenerations failed: {e}")
-        result = BaseResponse(code=10001, message="failed to generation image", data=[])    
+        result = BaseResponse(code=10001, message="failed to generation image", data=[])
         return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
     finally:
         del image
@@ -120,8 +121,9 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
         image_response = ImageResponse(url=url, latency=latency, is_safe_prompt=is_safe_prompt)
         result = BaseResponse(code=10000, message="success", data=[image_response])
     else:
-        result = BaseResponse(code=10001, message="failed to generation image", data=[])    
+        result = BaseResponse(code=10001, message="failed to generation image", data=[])
     return JSONResponse(content=result.model_dump(), status_code=HTTPStatus.OK)
+
 
 def build_app(args: Namespace) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
@@ -141,6 +143,7 @@ def build_app(args: Namespace) -> FastAPI:
         return JSONResponse(content="BAD_REQUEST", status_code=HTTPStatus.BAD_REQUEST)
 
     return app
+
 
 async def run_server(args, **uvicorn_kwargs) -> None:
     logger.info("nunchaku API server version %s", VERSION)
@@ -171,6 +174,7 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     # NB: Await server shutdown only after the backend context is exited
     await shutdown_task
 
+
 async def serve_http(app: FastAPI, **uvicorn_kwargs: Any):
     logger.info("Available routes are:")
     for route in app.routes:
@@ -180,7 +184,7 @@ async def serve_http(app: FastAPI, **uvicorn_kwargs: Any):
         if methods is None or path is None:
             continue
 
-        logger.info("Route: %s, Methods: %s", path, ', '.join(methods))
+        logger.info("Route: %s, Methods: %s", path, ", ".join(methods))
 
     config = uvicorn.Config(app, log_config=None, **uvicorn_kwargs)
     server = uvicorn.Server(config)
@@ -208,10 +212,11 @@ async def serve_http(app: FastAPI, **uvicorn_kwargs: Any):
         process = find_process_using_port(port)
         if process is not None:
             logger.debug(
-                "port %s is used by process %s launched with command:\n%s",
-                port, process, " ".join(process.cmdline()))
+                "port %s is used by process %s launched with command:\n%s", port, process, " ".join(process.cmdline())
+            )
         logger.info("Shutting down FastAPI HTTP server.")
         return server.shutdown()
+
 
 def find_process_using_port(port: int) -> Optional[psutil.Process]:
     # TODO: We can not check for running processes with network
@@ -235,8 +240,7 @@ def _add_shutdown_handlers(app: FastAPI, server: uvicorn.Server) -> None:
 
     @app.exception_handler(RuntimeError)
     async def runtime_error_handler(request: Request, __):
-        logger.fatal("RuntimeError, terminating server "
-                         "process")
+        logger.fatal("RuntimeError, terminating server " "process")
         server.should_exit = True
         return Response(status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -248,14 +252,17 @@ def set_ulimit(target_soft_limit=65535):
 
     if current_soft < target_soft_limit:
         try:
-            resource.setrlimit(resource_type,
-                               (target_soft_limit, current_hard))
+            resource.setrlimit(resource_type, (target_soft_limit, current_hard))
         except ValueError as e:
             logger.warning(
                 "Found ulimit of %s and failed to automatically increase"
                 "with error %s. This can cause fd limit errors like"
                 "`OSError: [Errno 24] Too many open files`. Consider "
-                "increasing with ulimit -n", current_soft, e)
+                "increasing with ulimit -n",
+                current_soft,
+                e,
+            )
+
 
 def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
     state = raw_req.app.state
@@ -268,7 +275,7 @@ def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
     lora_weight = req.lora_weight
 
     prompt = PROMPT_TEMPLATES[lora_name].format(prompt=prompt)
-    
+
     if pipeline.cur_lora_name != lora_name:
         if precision == "bf16":
             for m in pipeline.transformer.modules():
@@ -300,9 +307,10 @@ def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
             pipeline.transformer.set_lora_strength(lora_weight)
     pipeline.cur_lora_name = lora_name
     pipeline.cur_lora_weight = lora_weight
-    
 
-    logger.info(f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, guidance_scale={req.guidance_scale}, num_inference_steps={req.num_inference_steps}, seed={req.seed}")
+    logger.info(
+        f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, guidance_scale={req.guidance_scale}, num_inference_steps={req.num_inference_steps}, seed={req.seed}"
+    )
     image = pipeline(
         prompt=prompt,
         height=height,
@@ -312,6 +320,7 @@ def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
         generator=torch.Generator().manual_seed(req.seed),
     ).images[0]
     return image
+
 
 def read_config():
     load_dotenv()
@@ -330,7 +339,7 @@ def read_config():
         raise ValueError("S3_AWS_ACCESS_KEY_ID environment variable must be set and not empty.")
     if not aws_secret_access_key:
         raise ValueError("S3_AWS_SECRET_ACCESS_KEY environment variable must be set and not empty.")
-    
+
     s3 = S3Config(
         bucket=bucket,
         prefix_path=prefix_path,
@@ -340,6 +349,7 @@ def read_config():
 
     config = Config(s3=s3, safe_check_url=safe_check_url)
     return config
+
 
 def init_app_state(app_state, pipeline, args):
     app_state.model = args.model
@@ -351,8 +361,11 @@ def init_app_state(app_state, pipeline, args):
     logger.info("get config done")
     app_state.s3_client = s3_util.get_s3_client(app_state.config.s3)
     logger.info(f"start init safety checker {args.no_safety_checker}")
-    app_state.safety_checker = SafetyChecker(device="cuda", url=app_state.config.safe_check_url, disabled=args.no_safety_checker)
+    app_state.safety_checker = SafetyChecker(
+        device="cuda", url=app_state.config.safe_check_url, disabled=args.no_safety_checker
+    )
     logger.info("end init safety checker")
+
 
 def mark_args(parser: ArgumentParser) -> None:
     parser.add_argument(
@@ -366,8 +379,10 @@ def mark_args(parser: ArgumentParser) -> None:
         choices=["int4", "fp4", "bf16"],
         help="Which precisions to use",
     )
-    
-    parser.add_argument("--use-fp16-attention", action="store_true", help="Whether to use nunchaku fp16 attention", default=False)
+
+    parser.add_argument(
+        "--use-fp16-attention", action="store_true", help="Whether to use nunchaku fp16 attention", default=False
+    )
     parser.add_argument("--use-qencoder", action="store_true", help="Whether to use 4-bit text encoder")
     parser.add_argument("--no-safety-checker", action="store_true", help="Disable safety checker")
     parser.add_argument("--count-use", action="store_true", help="Whether to count the number of uses")
@@ -376,6 +391,7 @@ def mark_args(parser: ArgumentParser) -> None:
     parser.add_argument("--allow-credentials", type=bool, default=True)
     parser.add_argument("--allowed-methods", type=list, default=["*"])
     parser.add_argument("--allowed-headers", type=list, default=["*"])
+
 
 def load_pipeline(args) -> FluxPipeline:
     pipeline = get_pipeline(
@@ -389,6 +405,7 @@ def load_pipeline(args) -> FluxPipeline:
     pipeline.cur_lora_name = "None"
     pipeline.cur_lora_weight = 0
     return pipeline
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()

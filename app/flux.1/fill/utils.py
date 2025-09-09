@@ -1,12 +1,15 @@
 import argparse
 import logging
 from typing import Dict
-from fastapi import Request
-from PIL import Image
+
 import torch
 from diffusers import FluxFillPipeline
+from fastapi import Request
+from PIL import Image
+
 from entrypoint.openai.log import setup_logging
 from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
+
 from .vars import MAX_SEED, STYLES
 
 setup_logging()
@@ -25,6 +28,8 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--gradio-root-path", type=str, default="")
     args = parser.parse_args()
     return args
+
+
 def get_pipeline(args) -> FluxFillPipeline:
     if args.precision == "bf16":
         pipeline = FluxFillPipeline.from_pretrained("black-forest-labs/FLUX.1-Fill-dev", torch_dtype=torch.bfloat16)
@@ -38,7 +43,7 @@ def get_pipeline(args) -> FluxFillPipeline:
         )
         if args.use_fp16_attention:
             # set attention implementation to fp16
-            transformer.set_attention_impl("nunchaku-fp16")  
+            transformer.set_attention_impl("nunchaku-fp16")
         pipeline_init_kwargs["transformer"] = transformer
         if args.use_qencoder:
             from nunchaku.models.text_encoders.t5_encoder import NunchakuT5EncoderModel
@@ -55,12 +60,13 @@ def get_pipeline(args) -> FluxFillPipeline:
         pipeline.precision = args.precision
     return pipeline
 
+
 def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     pipeline = raw_req.app.state.pipeline
 
     prompt_template = STYLES[req.styles]
     prompt = prompt_template.format(prompt=req.prompt)
-    
+
     # Validate req.seed
     if not (0 <= req.seed <= MAX_SEED):
         raise ValueError(f"Seed must be between 0 and {MAX_SEED}.")
@@ -68,7 +74,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     # Validate req.num_inference_steps
     if not (10 <= req.num_inference_steps <= 50):
         raise ValueError("Number of inference steps must be between 10 and 50.")
-    
+
     # Validate req.guidance_scale
     if not (1 <= req.guidance_scale <= 50):
         raise ValueError("Guidance scale must be between 1 and 50.")
@@ -79,7 +85,9 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     mask = images["layer_0"].getchannel(3)  # Mask is stored in the last channel
     pic = images["background"].convert("RGB")  # This is the original photo
 
-    logger.info(f"Prompt: {prompt}, guidance_scale: {req.guidance_scale}, seed: {req.seed}, num_inference_steps: {req.num_inference_steps}")
+    logger.info(
+        f"Prompt: {prompt}, guidance_scale: {req.guidance_scale}, seed: {req.seed}, num_inference_steps: {req.num_inference_steps}"
+    )
     return pipeline(
         prompt=prompt,
         image=pic,

@@ -1,22 +1,24 @@
 import argparse
 import logging
-from entrypoint.openai.log import setup_logging
 from typing import Dict
 
-from fastapi import Request
 import numpy as np
+import torch
+from fastapi import Request
+from PIL import Image
+
+from entrypoint.openai.log import setup_logging
+from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
 
 from .flux_pix2pix_pipeline import FluxPix2pixTurboPipeline
-import torch
-from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
 from .vars import DEFAULT_SKETCH_GUIDANCE, MAX_SEED, STYLES
-from PIL import Image
 
 blank_image = Image.new("RGB", (1024, 1024), (255, 255, 255))
 
 setup_logging()
 
 logger = logging.getLogger(__name__)
+
 
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -28,11 +30,14 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--count-use", action="store_true", help="Whether to count the number of uses")
     parser.add_argument("--gradio-root-path", type=str, default="")
     args = parser.parse_args()
-    return 
+    return args
+
 
 def get_pipeline(args) -> FluxPix2pixTurboPipeline:
     if args.precision == "bf16":
-        pipeline = FluxPix2pixTurboPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell", torch_dtype=torch.bfloat16)
+        pipeline = FluxPix2pixTurboPipeline.from_pretrained(
+            "black-forest-labs/FLUX.1-schnell", torch_dtype=torch.bfloat16
+        )
         pipeline = pipeline.to("cuda")
         pipeline.precision = "bf16"
         pipeline.load_control_module(
@@ -46,7 +51,7 @@ def get_pipeline(args) -> FluxPix2pixTurboPipeline:
         )
         if args.use_fp16_attention:
             # set attention implementation to fp16
-            transformer.set_attention_impl("nunchaku-fp16")  
+            transformer.set_attention_impl("nunchaku-fp16")
         pipeline_init_kwargs["transformer"] = transformer
         if args.use_qencoder:
             from nunchaku.models.text_encoders.t5_encoder import NunchakuT5EncoderModel
@@ -68,6 +73,7 @@ def get_pipeline(args) -> FluxPix2pixTurboPipeline:
         )
     return pipeline
 
+
 def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     pipeline = raw_req.app.state.pipeline
     prompt = req.prompt
@@ -75,7 +81,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     image_numpy = np.array(image.convert("RGB"))
     if prompt.strip() == "" and (np.sum(image_numpy == 255) >= 3145628 or np.sum(image_numpy == 0) >= 3145628):
         return blank_image, "Please input the prompt or draw something."
-    
+
     prompt_template = STYLES[req.styles]
     prompt = prompt_template.format(prompt=prompt)
     # Validate req.seed

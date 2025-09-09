@@ -1,10 +1,11 @@
 import datetime
 import logging
-from logging.handlers import RotatingFileHandler
 import os
 import sys
+from logging.handlers import RotatingFileHandler
 
 _logger_initialized = False
+
 
 def setup_logging():
     """
@@ -25,24 +26,21 @@ def setup_logging():
     log_file_name = os.path.join(log_dir, f"api_server_{timestamp}.log")
 
     # Configure the root logger
-    logger = logging.getLogger() # Get the root logger
-    logger.setLevel(logging.INFO) # Set the minimum logging level
+    logger = logging.getLogger()  # Get the root logger
+    logger.setLevel(logging.INFO)  # Set the minimum logging level
 
     # Clear existing handlers to prevent duplicate logs if called multiple times
     if logger.handlers:
         for handler in logger.handlers:
             logger.removeHandler(handler)
-            
+
     # Create a file handler for rotating logs by size
     # MaxBytes = 10MB, backupCount = 5 (keep 5 old log files)
     file_handler = RotatingFileHandler(
-        log_file_name,
-        maxBytes=10 * 1024 * 1024, # 10 MB
-        backupCount=5,
-        encoding="utf-8"
+        log_file_name, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"  # 10 MB
     )
     # Define the format for the log messages
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(formatter)
 
     # Add the file handler to the logger
@@ -59,13 +57,12 @@ def setup_logging():
     logging.getLogger("uvicorn.error").propagate = True
 
     # Redirect stdout and stderr to the logger
-    sys.stdout = StreamToLogger(logging.getLogger('stdout'), logging.INFO)
-    sys.stderr = StreamToLogger(logging.getLogger('stderr'), logging.ERROR)
+    sys.stdout = StreamToLogger(logging.getLogger("stdout"), logging.INFO)
+    sys.stderr = StreamToLogger(logging.getLogger("stderr"), logging.ERROR)
 
     logger.info("Logging configured successfully.")
     _logger_initialized = True
     return logger
-
 
 
 # Define a custom stream to redirect stdout/stderr to the logger
@@ -73,10 +70,11 @@ class StreamToLogger(object):
     """
     Fake file-like stream object that redirects writes to a logger instance.
     """
+
     def __init__(self, logger, log_level=logging.INFO):
         self.logger = logger
         self.log_level = log_level
-        self.linebuf = ''
+        self.linebuf = ""
 
     def write(self, buf):
         for line in buf.rstrip().splitlines():

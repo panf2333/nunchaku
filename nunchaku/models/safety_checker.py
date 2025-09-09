@@ -3,9 +3,10 @@ This module provides a `SafetyChecker` class for evaluating user prompts against
 defined safety policies using a large language model. Only used deploying online gradio demos.
 """
 
+import requests
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import requests
+
 from entrypoint.openai.protocol import SafeCheckPromptRequest, SafetyCheckResponse
 
 #: Template for the safety check prompt.
@@ -49,6 +50,7 @@ class SafetyChecker:
     >>> checker("Any prompt")
     True
     """
+
     def __init__(self, device: str | torch.device = "cuda", url: str = None, disabled: bool = False):
         """
         Initialize the SafetyChecker.

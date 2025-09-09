@@ -1,16 +1,19 @@
-import os
-from fastapi import Request
 import logging
+import os
+
 import torch
 from diffusers import FluxPipeline
+from fastapi import Request
 from peft.tuners import lora
-from entrypoint.openai.protocol import CreateImageRequest
-from .vars import LORA_PATHS, SVDQ_LORA_PATHS, PROMPT_TEMPLATES
 
+from entrypoint.openai.protocol import CreateImageRequest
 from nunchaku import NunchakuFluxTransformer2dModel
 from nunchaku.models.transformers.transformer_flux_v2 import NunchakuFluxTransformer2DModelV2
 
+from .vars import LORA_PATHS, PROMPT_TEMPLATES, SVDQ_LORA_PATHS
+
 logger = logging.getLogger(__name__)
+
 
 def hash_str_to_int(s: str) -> int:
     """Hash a string to an integer."""
@@ -19,6 +22,7 @@ def hash_str_to_int(s: str) -> int:
     for char in s:
         hash_int = (hash_int * 31 + ord(char)) % modulus
     return hash_int
+
 
 def get_pipeline(
     model_name: str,
@@ -117,6 +121,8 @@ def get_pipeline(
         pipeline = pipeline.to(device)
 
     return pipeline
+
+
 def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
     state = raw_req.app.state
     model = state.model
@@ -128,7 +134,7 @@ def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
     lora_weight = req.lora_weight
 
     prompt = PROMPT_TEMPLATES[lora_name].format(prompt=prompt)
-    
+
     if pipeline.cur_lora_name != lora_name:
         if precision == "bf16":
             for m in pipeline.transformer.modules():
@@ -160,9 +166,10 @@ def generate_image(req: CreateImageRequest, raw_req: Request, prompt: str):
             pipeline.transformer.set_lora_strength(lora_weight)
     pipeline.cur_lora_name = lora_name
     pipeline.cur_lora_weight = lora_weight
-    
 
-    logger.info(f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, guidance_scale={req.guidance_scale}, num_inference_steps={req.num_inference_steps}, seed={req.seed}")
+    logger.info(
+        f"generate_image: model={model}, prompt={prompt}, height={height}, width={width}, guidance_scale={req.guidance_scale}, num_inference_steps={req.num_inference_steps}, seed={req.seed}"
+    )
     image = pipeline(
         prompt=prompt,
         height=height,

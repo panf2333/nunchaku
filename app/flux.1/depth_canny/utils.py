@@ -1,16 +1,18 @@
 import argparse
 import logging
-from fastapi import Request
+from typing import Dict
+
 import torch
 from controlnet_aux import CannyDetector
 from diffusers import FluxControlPipeline
+from fastapi import Request
 from image_gen_aux import DepthPreprocessor
+from PIL import Image
 
 from entrypoint.openai.log import setup_logging
 from nunchaku.models.transformers.transformer_flux import NunchakuFluxTransformer2dModel
-from typing import Dict
-from PIL import Image
-from .vars import MAX_SEED, HEIGHT, STYLES, WIDTH
+
+from .vars import HEIGHT, MAX_SEED, STYLES, WIDTH
 
 setup_logging()
 
@@ -31,6 +33,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--gradio-root-path", type=str, default="")
     args = parser.parse_args()
     return args
+
 
 def get_pipeline(args):
     pipeline_class = None
@@ -57,7 +60,7 @@ def get_pipeline(args):
         )
         if args.use_fp16_attention:
             # set attention implementation to fp16
-            transformer.set_attention_impl("nunchaku-fp16")  
+            transformer.set_attention_impl("nunchaku-fp16")
         pipeline_init_kwargs["transformer"] = transformer
         if args.use_qencoder:
             from nunchaku.models.text_encoders.t5_encoder import NunchakuT5EncoderModel
@@ -82,7 +85,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
 
     prompt_template = STYLES[req.styles]
     prompt = prompt_template.format(prompt=req.prompt)
-    
+
     # Validate req.seed
     if not (0 <= req.seed <= MAX_SEED):
         raise ValueError(f"Seed must be between 0 and {MAX_SEED}.")
@@ -90,7 +93,7 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     # Validate req.num_inference_steps
     if not (10 <= req.num_inference_steps <= 50):
         raise ValueError("Number of inference steps must be between 10 and 50.")
-    
+
     # Validate req.guidance_scale
     if not (1 <= req.guidance_scale <= 50):
         raise ValueError("Guidance scale must be between 1 and 50.")
@@ -103,11 +106,13 @@ def generate_image(req, raw_req: Request, images: Dict[str, Image]) -> Image:
     else:
         assert model == "depth"
         composite = images["composite"]
-        if composite.mode != 'RGB':
-            composite = composite.convert('RGB')
+        if composite.mode != "RGB":
+            composite = composite.convert("RGB")
         processed_img = processor(composite)[0].convert("RGB")
 
-    logger.info(f"Prompt: {prompt}, num_inference_steps: {req.num_inference_steps}, guidance_scale: {req.guidance_scale}, seed: {req.seed}")
+    logger.info(
+        f"Prompt: {prompt}, num_inference_steps: {req.num_inference_steps}, guidance_scale: {req.guidance_scale}, seed: {req.seed}"
+    )
     return pipeline(
         prompt=prompt,
         control_image=processed_img,

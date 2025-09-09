@@ -1,11 +1,14 @@
 from fastapi import Form
+
 # Assuming DEFAULT_SKETCH_GUIDANCE is defined in another file, import it
 from sketch.vars import DEFAULT_SKETCH_GUIDANCE
+
 
 class SketchToImageParams:
     """
     A dependency class to encapsulate all form parameters for the sketch-to-image endpoint.
     """
+
     def __init__(
         self,
         prompt: str = Form(...),
@@ -21,7 +24,7 @@ class SketchToImageParams:
         self.num_inference_steps = num_inference_steps
         self.guidance_scale = guidance_scale
         self.styles = styles
-    
+
     # --- ADD THIS METHOD ---
     def __repr__(self) -> str:
         # This will dynamically create a string like "SketchToImageParams(prompt='...', seed=...)"
