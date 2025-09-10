@@ -80,7 +80,7 @@ class S3Config(BaseModel):
 
 class Config(BaseModel):
     s3: S3Config
-    safe_check_url: str
+    safe_check_url: str | None = None
 
 
 ########################### config ########################

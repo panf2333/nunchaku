@@ -129,7 +129,7 @@ async def imagesGenerations(req: CreateImageRequest, raw_req: Request) -> Respon
 # +++ NEW ENDPOINT FOR SKETCH-TO-IMAGE BASED ON GRADIO 'RUN'
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 @router.post("/v1/images/edits")
-async def sketch_to_image(
+async def image_edits(
     raw_req: Request,
     # This is the main change: accepting a list of UploadFile objects
     images: List[UploadFile] = File(...),
